@@ -1,1 +1,7 @@
 # List required packages in this file, one per line.
+numpy  #numerical numpy
+opencv-python  #video file handling library
+moviepy
+scikit-image
+matplotlib
+librosa #audio file handling library
