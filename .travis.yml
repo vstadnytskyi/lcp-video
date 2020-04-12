@@ -11,7 +11,14 @@ install:
   - pip install .
   # Install extra requirements for running tests and building docs.
   - pip install -r requirements-dev.txt
-
+env:
+  global:
+    # Doctr deploy key for vstadnytskyi/lcp-video
+    - secure: "sRxEjFBtqXRxlOjXlEYVVlO7ZKlUdZufltjk2ZOqIrApJ7ymkMuFn3z7IoCd7RQ1u+IliUwSnoMutHq9lWm4r9/mMdzOsmcKagVP+9UlkNITwLm96K1n8o+hq7Jco
+A9i0MR6UUBftVBh1JbvPmj5sfuJXcVe01PRFKQYfheDZqGAY+49TlwxQFa5I7P4bQ2qvu89cxEXWi1c1/dSnHpfMTqAqF7U60KDH8jWo0L4ZZ/sgEr1al+gP7r0KPRMDxroEBp/g5MIcL3HZ
++U/TAEtcBhjbA7AP2hRLsJd8PTzfUfM4qrLOxulZSgy9BcjRzufFTWip4Qh8UBbBMpOX9RuORfQwawi8Id4B/GDBByD+6pyiHDftSsziHxZhVx4UbZU3N94nv41/E5tXU2cecjkDZKHuIpXb
+tfVhYDH0+UL08FSKcEqbMo5rcZpXuwaBoj01y6a2bbJY8CFrLX3+yoqo0gCK3o+uJYFYXFPJqJrb2popJv87vyxF9rJPdKcyuJvXyzmUwmPaVyVpYK4DUvUQb419zC2QMQvhuho8rylGdUGb
+bHL6UqlcPSRhmQOXIJznjzvWo1Q4HAyW56T+6U7sFp8xDyvZHTvN8qL88Kvserqfse+x5gaNkBpF5un5Dj1iZlTKWOe27a4d/jeGplG7Nf5PscUvJ+Ue41LEVHIf6w="
 script:
   - coverage run -m pytest  # Run the tests and check for test coverage.
   - coverage report -m  # Generate test coverage report.
