@@ -5,10 +5,11 @@ Numerical Analysis and Data Handling library
 # Images Analysis Section
 def get_moments(image):
     """
-    returns moments calculate from an image.
+    returns moments calculate from an image provided. Uses cv2 (opencv-python) library.
 
     returns a dictionary of moments:
-
+    'm00', 'm10', 'm01', 'm20', 'm11', 'm02', 'm30', 'm21', 'm12', 'm03', 'mu20', 'mu11', 'mu02', 'mu30', 'mu21', 'mu12', 'mu03
+    ', 'nu20', 'nu11', 'nu02', 'nu30', 'nu21', 'nu12', 'nu03'
 
     Parameters
     ----------
@@ -83,7 +84,7 @@ def get_histogram(arr,depth = 16):
     bins = arange(0,(2**depth),1) #calculating histogram
     y,x = histogram(arr,bins = bins)
     return x[:-1],y
-    
+
 #Vector analysis section
 def convert_to_rate(x,y, tau = 1):
     """
@@ -180,6 +181,115 @@ def distance_matrix(vector):
         for j in range(length):
             matrix[i,j] = distance(vector[i],vector[j])
     return matrix
+
+
+def analuse_spot(data, mask):
+    """
+    returns moments calculate from an image provided. Uses cv2 (opencv-python) library.
+
+    returns a dictionary of moments:
+    'm00', 'm10', 'm01', 'm20', 'm11', 'm02', 'm30', 'm21', 'm12', 'm03', 'mu20', 'mu11', 'mu02', 'mu30', 'mu21', 'mu12', 'mu03
+    ', 'nu20', 'nu11', 'nu02', 'nu30', 'nu21', 'nu12', 'nu03'
+
+    Parameters
+    ----------
+    data :: (numpy array)
+        data to append
+
+    Returns
+    -------
+    moments :: (dictionary)
+
+    Examples
+    --------
+    >>> moments = get_moments(image = image)
+    """
+
+def get_test_spots_list():
+    """
+    returns a list of possible spot IDs from the spots repository.
+
+    Parameters
+    ----------s
+
+    Returns
+    -------
+    list :: (list)
+
+    Examples
+    --------
+    >>> lst = get_test_spots_list()
+    """
+    from os.path import exists
+    print(exists('./lcp_video/test_data/spots'))
+
+def get_test_spots_image(spot_id = None):
+    """
+    returns a image from a repository of test images. If spot_id left None, it will return a random image from the repository.
+
+    Parameters
+    ----------
+    spot_id :: (dictionary)
+        dictionary from moments
+
+    Returns
+    -------
+    eccentricity :: (float)
+
+    Examples
+    --------
+    >>> spot_properties = get_spot_properties(m)
+    """
+
+def get_spot_properties(moments):
+    """
+    returns properties of the spot from moments dictionary provided by cv2 opencv-python library
+
+    Input keys in the dictionary:
+    'm00', 'm10', 'm01', 'm20', 'm11', 'm02', 'm30', 'm21', 'm12', 'm03', 'mu20', 'mu11', 'mu02', 'mu30', 'mu21', 'mu12', 'mu03
+    ', 'nu20', 'nu11', 'nu02', 'nu30', 'nu21', 'nu12', 'nu03'
+
+    mu - central moments
+    m - raw moments
+    nu - scale inveriant Hu moments
+    1) M. K. Hu, "Visual Pattern Recognition by Moment Invariants", IRE Trans. Info. Theory, vol. IT-8, pp.179–187, 1962
+    2) http://docs.opencv.org/modules/imgproc/doc/structural_analysis_and_shape_descriptors.html?highlight=cvmatchshapes#humoments Hu Moments' OpenCV method
+
+    Parameters
+    ----------
+    m :: (dictionary)
+        dictionary from moments
+
+    Returns
+    -------
+    eccentricity :: (float)
+
+    Examples
+    --------
+    >>> spot_properties = get_spot_properties(m)
+    """
+    from numpy import arctan
+    m = moments
+    moments['mu00'] = moments['m00']
+    #calculate new modified central moments
+    m["mu'20"] = moments['mu20']/moments['mu00']
+    m["mu'02"] = moments['mu02']/moments['mu00']
+    m["mu'11"]= moments['mu11']/moments['mu00']
+    lambda_large = 0.5*(m["mu'20"] + m["mu'02"] + (4*m["mu'11"]**2 + (m["mu'20"]-m["mu'02"])**2)**0.5)
+    lambda_small = 0.5*(m["mu'20"] + m["mu'02"] - (4*m["mu'11"]**2 + (m["mu'20"]-m["mu'02"])**2)**0.5)
+
+    #calculate eccentricity
+    eccentricity = (1-(lambda_large/lambda_small))**0.5
+    #calculate theta angle
+    theta = 0.5*arctan(2*m["mu'11"]/(m["mu'20"]-m["mu'02"]))
+
+    result = {}
+    result['eccentricity'] = eccentricity
+    result['theta'] = theta
+    result['axis_large'] = lambda_large
+    result['axis_small'] = lambda_small
+
+    return result
 
 # HDF File Object Section
 
