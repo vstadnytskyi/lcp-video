@@ -81,7 +81,9 @@ def get_frame(filename, frame):
     total_frame_count = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
     if frame <= total_frame_count:
         vidcap.set(cv2.CAP_PROP_POS_FRAMES,frame)
-    success,image = vidcap.read()
+        success,image = vidcap.read()
+    else:
+        success = False
     if success:
         return success, image
     else:
