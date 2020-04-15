@@ -83,9 +83,9 @@ def get_frame(filename, frame):
         vidcap.set(cv2.CAP_PROP_POS_FRAMES,frame)
     success,image = vidcap.read()
     if success:
-        return image
+        return success, image
     else:
-        return None
+        return False, None
 
 def get_cum_frames_index_range(filename, start, end):
     """
