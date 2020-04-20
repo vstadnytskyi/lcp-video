@@ -2,7 +2,8 @@ def test_video_info():
     """
     """
     from lcp_video import video
-    dic = video.get_video_info('./lcp_video/test_data/test_video_clip.mov')
+    filename = video.get_test_video_filename()
+    dic = video.get_video_info(filename)
     assert dic['height'] == 1080
     assert dic['width'] == 1920
     assert dic['fps'] == 60.0
@@ -10,12 +11,13 @@ def test_video_info():
 
 def test_get_frame():
     from lcp_video import video
-    success, frame = video.get_frame('./lcp_video/test_data/test_video_clip.mov',5)
+    filename = video.get_test_video_filename()
+    frame = video.get_frame(filename,5)
+
     assert frame.shape == (1080, 1920, 3)
     assert success == True
     assert frame.mean() == 0.08621238425925926
     assert frame.sum() == 536310
 
-    success, frame  = video.get_frame('./lcp_video/test_data/test_video_clip.mov',90)
-    assert success == False
+    frame  = video.get_test_video_filename(filename,90)
     assert frame == None

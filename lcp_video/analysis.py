@@ -1,4 +1,4 @@
-"""
+﻿"""
 Numerical Analysis and Data Handling library
 """
 
@@ -290,6 +290,95 @@ def get_spot_properties(moments):
     result['axis_small'] = lambda_small
 
     return result
+
+def smoothing_NMR_simple(image, r_size = 20, c_size = 50):
+    """
+    The simple smoothing algorithm that takes into account the background around a single peak. It doesn't work that well with a large spot.
+    """
+    rows = image.shape[0]
+    cols = image.shape[1]
+    I = image
+    I_prime = I*0
+    I_sum = I
+    for row in range(r_size,rows-r_size):
+        for col in range(c_size,cols-c_size):
+            I_sum[row,col] = I[row-r_size:row+r_size,col-c_size:col+c_size].sum()/(I[row-r_size:row+r_size,col-c_size:col+c_size].size)
+    I_prime = I -  I_sum
+    return I_prime
+
+def smoothing_NMR_sophisticated(image):
+    """
+    """
+    sum_I = image[20:-20,50:-50].sum()
+    I_prime = I - sum_I/4141
+    return I_prime
+
+def zinger_free_statistics_clip(filename,start,end,row,col,clip=2):
+    """
+    Adapted from SAXS-WAXS Analysis
+
+    Requires as input 'files', which is a list of image file names, and
+    'Dmean', the mean background to be subtracted from the image before
+    processing. For a dark dataset, set Dmean = 0.
+
+    Returns zinger- and sink-free M1 (mean), M2 (variance) and M3 (skew)
+    images. In addition, returns Imax and Imin images, which correspond to the
+    maximum and minimum values found, respectively. If Dmean = 0, it is assumed
+    that the data to be processed correspond to a 'dark' dataset, and the
+    images will not be scaled according to their integrated intensity before
+    performing a moments calculation. If Dmean is a 2D array of background
+    offset values, it is subtracted from the image, and the resulting difference
+    is scaled according to the integrated number of counts. Then, accumulates
+    sum, sum of squared, and sum of cubed pixel intensities and saves the
+    clip=M largest and smallest values for each pixel. Subtracts the saved maximum
+    and minimum values from the sum, sum of squares, and sum of cubes before
+    calculating M1, M2, and M3. Assuming zingers and sinks appear in at most
+    clip=M images in the series, the results should be zinger- and sink-free.
+    Since all calculations are performed in float64, the memory required for
+    9+2*clip 64-bit images (~112 MB each) is nearly 1.5 GB for clip = 2
+    (assuming 14 Mpixel images). These data are reduced to a 280 MB dictionary.
+    Note that 512 16-bit images (28 MB/image) occupy over 7 GB space."""
+    from numpy import sort,zeros,ones,cast,where,float32,seterr,array,isscalar
+    from cv2 import VideoCapture
+    vidcap = VideoCapture(filename)
+    Isum1 = zeros((row,col))
+    Isum2 = zeros((row,col))
+    Isum3 = zeros((row,col))
+    Imax = zeros((clip,row,col))
+    Imin = 255*ones((clip,row,col))
+    N_images = end-start
+    scale = []
+    for i in range(start,end):
+        success, img = vidcap.read()
+        image = cast[float](img[:,:,1])
+        image_sum = image.sum()
+        scale.append(image_sum)
+        Isum1 += image
+        Isum2 += image**2
+        Isum3 += image**3
+        zinger = image > Imax[0]
+        Imax[0] = where(zinger,image,Imax[0])
+        Imax = sort(Imax,axis=0)
+        sink = image < Imin[-1]
+        Imin[-1] = where(sink,image,Imin[-1])
+        Imin = sort(Imin,axis=0)
+
+    # Compute M1, M2, and M3 afer omitting corresponding Imax and Imin
+    Isum1 = Isum1 - Imax.sum(axis=0) - Imin.sum(axis=0)
+    Isum2 = Isum2 - (Imax**2).sum(axis=0) - (Imin**2).sum(axis=0)
+    Isum3 = Isum3 - (Imax**3).sum(axis=0) - (Imin**3).sum(axis=0)
+    scale = array(scale)
+    scale_mean = 1
+    N = N_images - 2*clip
+    M1 = cast[float32](scale_mean*Isum1/N)
+    M2 = cast[float32](scale_mean**2*Isum2/N - M1**2)
+    seterr(divide='ignore',invalid='ignore')
+    M3 = cast[float32]((scale_mean**3*Isum3/N - M1**3 - 3*M1*M2)/M2**1.5)
+    seterr(divide='warn',invalid='warn')
+    Imax1 = cast[float32](scale_mean*Imax[-1])
+    Imin0 = cast[float32](scale_mean*Imin[0])
+    zfs_dict = {'N':N,'mean':M1,'variance':M2,'skew':M3,'Imax':Imax1,'Imin':Imin0,'scale':scale}
+    return zfs_dict
 
 # HDF File Object Section
 

@@ -1,6 +1,8 @@
 """
 Video handling library
 """
+def get_test_video_filename():
+    return './lcp_video/test_data/test_video_clip.mov'
 
 def get_video_info(filename):
     """
@@ -85,9 +87,9 @@ def get_frame(filename, frame):
     else:
         success = False
     if success:
-        return success, image
+        return image
     else:
-        return False, None
+        return None
 
 def get_cum_frames_index_range(filename, start, end):
     """
