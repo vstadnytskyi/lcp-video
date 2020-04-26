@@ -7,4 +7,4 @@ from . import analysis
 from . import audio
 from . import video
 from . import plotting
-from .flir_camera import flir_camera 
+#from .flir_camera import flir_camera 
