@@ -15,7 +15,6 @@ def test_get_frame():
     frame = video.get_frame(filename,5)
 
     assert frame.shape == (1080, 1920, 3)
-    assert success == True
     assert frame.mean() == 0.08621238425925926
     assert frame.sum() == 536310
 
