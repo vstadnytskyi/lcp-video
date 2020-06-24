@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+
 env/
 PySpin/
 build/
@@ -81,3 +82,6 @@ target/
 
 #Ipython Notebook
 .ipynb_checkpoints
+
+
+procedures/
