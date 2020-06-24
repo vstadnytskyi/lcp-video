@@ -1,7 +1,8 @@
 # List required packages in this file, one per line.
+# note always update pip "python3 -m pip install --upgrade pip"
+# to insure all packages can be installed properly.
 numpy  #numerical numpy
 opencv-python  #video file handling library
-moviepy
 scikit-image
 matplotlib
 librosa #audio file handling library
