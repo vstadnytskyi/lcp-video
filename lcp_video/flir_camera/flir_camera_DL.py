@@ -15,7 +15,7 @@ class FlirCamera():
         self.system = system
 
         #Acquisition
-        self.queue_length = 128
+        self.queue_length = 64
         self.acquiring = False
         self.header_length = 4096
 
@@ -542,7 +542,7 @@ class FlirCamera():
         """
         self.recording_basefilename = self.recording_root+f'{self.name}_{comments}'
         self.recording_chunk_pointer = 0
-        filename = self.recording_basefilename + '_' + str(self.recording_chunk_pointer) + '.raw.hdf5'
+        filename = self.recording_basefilename + '_' + str(self.recording_chunk_pointer) + '.tmpraw.hdf5'
         self.recording_create_file(filename = filename, N_frames = N_frames)
         self.recording_Nframes = N_frames
         self.recording_pointer = 0
@@ -601,6 +601,8 @@ class FlirCamera():
         records iamges to file in a loop.
         """
         from time import time,ctime
+        from os import utime, rename
+        from h5py import File
         while (self.recording):
             if self.recording_pointer >= self.recording_Nframes:
                 self.recording_chunk_pointer += 1
@@ -608,9 +610,16 @@ class FlirCamera():
                     self.recording = False
                     break
                 self.recording_pointer = 0
-                filename = self.recording_basefilename + '_' + str(self.recording_chunk_pointer) + '.raw.hdf5'
+
+                rename(self.recording_basefilename + '_' + str(self.recording_chunk_pointer-1) + '.tmpraw.hdf5',self.recording_basefilename + '_' + str(self.recording_chunk_pointer-1) + '.raw.hdf5')
+                f = File(self.recording_basefilename + '_' + str(self.recording_chunk_pointer-1) + '.raw.hdf5','r')
+                timestamp = f['timestamps_lab'][0]
+                utime(self.recording_basefilename + '_' + str(self.recording_chunk_pointer-1) + '.raw.hdf5',(timestamp,timestamp))
+
+                filename = self.recording_basefilename + '_' + str(self.recording_chunk_pointer) + '.tmpraw.hdf5'
                 Nframes = self.recording_Nframes
                 self.recording_create_file(filename,Nframes)
+
             filename = self.recording_filename
             N = self.recording_N
             if (self.queue.length > N):

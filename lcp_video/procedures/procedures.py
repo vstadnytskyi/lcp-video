@@ -26,24 +26,23 @@ def move_files_with_compression(source, destination, suffix = '.raw.hdf5', has =
         prefix = filename.split('.raw.hdf5')[0]
         print(ctime(time()),f'moving file....')
         print(f'from{source+filename}')
-        print(f'to {destination+prefix}.tmp.hdf5')
+        print(f'to {destination+prefix}.tmpdata.hdf5')
         t1 = time()
         with File(source+filename,'r') as f:
-            with File(destination+prefix+'.tmp.hdf5','a') as fnew:
+            with File(destination+prefix+'.tmpdata.hdf5','a') as fnew:
                 for key in list(f.keys()):
                     data = f[key]
                     if key == 'images':
-                        fnew.create_dataset(key, data = data, compression = 'gzip', chunks = (1,200,256))
+                        fnew.create_dataset(key, data=data, compression='gzip', chunks=(1,200,256), dtype='int16')
                     else:
                         fnew.create_dataset(key, data = data)
-
             timestamp = f['timestamps'][0]
         t2 = time()
         print(ctime(time()),f'time: {t2-t1} with size {os.path.getsize(source+filename)/(1024*1024)}, speed {os.path.getsize(source+filename)/((t2-t1)*1024*1024)} MB/s')
         print(f'removing file {source+filename}')
-        print(f'changing {destination+prefix}.tmp.hdf5')
-        os.utime(destination+prefix+'.tmp.hdf5',(timestamp, timestamp))
-        os.rename(destination+prefix+'.tmp.hdf5',destination+prefix+'.data.hdf5')
+        print(f'changing {destination+prefix}.tmpdata.hdf5')
+        os.utime(destination+prefix+'.tmpdata.hdf5',(timestamp, timestamp))
+        os.rename(destination+prefix+'.tmpdata.hdf5',destination+prefix+'.data.hdf5')
         os.remove(source+filename)
 
 def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', has = '', N = 0):
@@ -66,17 +65,17 @@ def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', 
             prefix = filename.split('.raw.hdf5')[0]
             print(ctime(time()),f'moving file....')
             print(f'from{source+filename}')
-            print(f'to {destination+prefix}.tmp.hdf5')
+            print(f'to {destination+prefix}.tmpdata.hdf5')
             t1 = time()
             with File(source+filename,'r') as f:
                 width = f['image width'][()]
                 height = f['image height'][()]
                 mask = get_conversion_mask(int(width*height*1.5))
-                with File(destination+prefix+'.tmp.hdf5','a') as fnew:
+                with File(destination+prefix+'.tmpdata.hdf5','a') as fnew:
                     for key in list(f.keys()):
                         data = f[key]
                         if key == 'images':
-                            fnew.create_dataset(key,(data.shape[0],height,width), compression = 'gzip', chunks = (1,height/8,width/8))
+                            fnew.create_dataset(key,(data.shape[0],height,width), compression='gzip', chunks=(1,height/8,width/8), dtype='int16')
                             for i in range(data.shape[0]):
                                 datai = copy(data[i])
                                 fnew['images'][i] = raw_to_image(datai,height,width,mask)
@@ -87,9 +86,9 @@ def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', 
             t2 = time()
             print(ctime(time()),f'time: {t2-t1} with size {os.path.getsize(source+filename)/(1024*1024)}, speed {os.path.getsize(source+filename)/((t2-t1)*1024*1024)} MB/s')
             print(f'removing file {source+filename}')
-            print(f'changing {destination+prefix}.tmp.hdf5')
-            os.utime(destination+prefix+'.tmp.hdf5',(timestamp, timestamp))
-            os.rename(destination+prefix+'.tmp.hdf5',destination+prefix+'.data.hdf5')
+            print(f'changing {destination+prefix}.tmpdata.hdf5')
+            os.utime(destination+prefix+'.tmpdata.hdf5',(timestamp, timestamp))
+            os.rename(destination+prefix+'.tmpdata.hdf5',destination+prefix+'.data.hdf5')
             os.remove(source+filename)
     if N == 0:
         once(lst)
@@ -439,12 +438,41 @@ def check_dataset(root, has = '', extension = ''):
     timestamps_result = concatenate(asarray(timestamps))
     return timestamps_result
 
+def change_hdf5(root,namelist):
+    """
+    a template used to change the hdf5 file.
+    the change is done in 3 steps.
+    - rename original file by adding "temp" at the beginning -> temp{}
+    - creating a new file with changed dtype or whatever else needs to be changed
+    - copy timestamps from origin file to new file
+    - delete old file "temp{}""
+    """
+    from h5py import File
+    import os
+    from time import ctime, time
+    for name in namelist:
+        print(f'{ctime(time())}: chaning {name}')
+        os.rename(root+name,root+'temp'+name)
+        with File(root+name, 'a') as fnew:
+            with File(root+'temp'+name,'r') as f:
+                for key in list(f.keys()):
+                    data = f[key]
+                    if key == 'images':
+                        height = f['image height'][()]
+                        width = f['image width'][()]
+                        fnew.create_dataset(key,data = data, chunks=(1,height/8,width/8), dtype='uint16', compression='gzip')
+                    else:
+                        fnew.create_dataset(key, data = data)
+                timestamp = f['timestamps_lab'][0]
+        os.utime(root+name,(timestamp, timestamp))
+        os.remove(root+'temp'+name)
+
 def show_usage():
     """
     a simple function that shows the usage of the functions. It is more like
     """
     print('Move the data from .raw.hdf5 to .data.hdf5')
-    print("root = '/net/femto-data2/C/covid19Data/Data/2020.06.19/'")
+    print("root = '/net/******/C/covid19Data/Data/2020.06.19/'")
     print("----------------------------------------")
 
     print('Generate a list of files to analyze')
@@ -463,7 +491,7 @@ def show_usage():
     print('open new shell. cd /net/femto/C/SAXS-WAXS\ Analysis/software/')
     print('run ipython3')
     print('import covid_procedures_VS')
-    print("root = '/net/femto-data2/C/covid19Data/Data/2020.06.19/'")
+    print("root = '/net/*******/C/covid19Data/Data/2020.06.19/'")
     print("covid_procedures_VS.process_data(root,select=['.data.hdf5'])")
     print("----------------------------------------")
 
