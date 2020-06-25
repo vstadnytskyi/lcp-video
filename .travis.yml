@@ -14,6 +14,13 @@ jobs:
     - name: "Python 3.6.0 on Xenial Linux"
       python: 3.6           # this works for Linux but is ignored on macOS or Windows
       # https://blog.travis-ci.com/2018-10-11-windows-early-release
+    - name: "Python 3.7.5 on macOS, xcode11.6"
+      os: osx
+      osx_image: xcode11.6  # Python 3.7.5 running on macOS 10.14.4
+      language: shell       # 'language: python' is an error on Travis CI macOS
+      # python: 3.7         # 'python:' is ignored on Travis CI macOS
+      before_install:
+        python3 --version ; pip3 --version ; sw_vers
     - name: "Python 3.7.5 on macOS, xcode11.2"
       os: osx
       osx_image: xcode11.2  # Python 3.7.5 running on macOS 10.14.4
@@ -26,6 +33,13 @@ jobs:
       osx_image: xcode10  # Python 3.7.4 running on macOS 10.13.6
       language: shell       # 'language: python' is an error on Travis CI macOS
       # python: 3.7         # 'python:' is ignored on Travis CI macOS
+      before_install:
+        python3 --version ; pip3 --version ; sw_ver
+    - name: "Python 3.6 on macOS, xcode10"
+      os: osx
+      osx_image: xcode10  # Python 3.7.4 running on macOS 10.13.6
+      language: shell       # 'language: python' is an error on Travis CI macOS
+      python: 3.6         # 'python:' is ignored on Travis CI macOS
       before_install:
         python3 --version ; pip3 --version ; sw_vers
     - name: "Python 3.7.4 on Windows"
