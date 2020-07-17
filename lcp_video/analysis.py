@@ -881,3 +881,106 @@ def get_random_array(size = (3000,4096),range = (0,4094), dtype = 'uint16'):
     """
     from numpy.random import randint
     return randint(range[0],range[1],size = size,dtype = dtype)
+
+def label(input):
+    """
+    customized label function that mimics functionality of label functions in scipy and skimage (see below)
+
+    the first axis(fast axis) is concidered as fast axis as in numpy definitions.
+
+    scipy.ndimage.label
+    skimage.measure.label https://scikit-image.org/docs/stable/api/skimage.measure.html#skimage.measure.label
+    """
+    N_spot_max = 0
+    length = input.shape[0]
+    for i in range(1,length):
+        prev_mask = fmask['mask'][i-1]
+        prev_emask = femask['emask'][i-1]
+        mask = fmask['mask'][i]
+        #create new enumarated mask
+        emask = label(mask,ones((3,3),bool))[0]
+        N_spot_max += emask.max()
+        #take care of overlapping contiguious spots by assigning them to a number from previous frame.
+        idx = where(emask != 0)
+        emask[idx] += N_spot_max
+        temp_mask = grow_mask(prev_mask,1)*mask
+        temp_label = label(temp_mask,ones((3,3),bool))[0]
+
+        # Compute overlaps with the previous emask.
+
+        #Grow emasks by M(default 1) and get indices of overlapping seciton. Multiplication of masks returns only pixels that are non-zero in both masks.
+        prev_emask_g =grow_mask(prev_emask,1)
+        emask_g = grow_mask(emask,1)
+        indices = where(emask1_g*emask2_g > 0)
+
+        #obtain unique values and indices
+        values_u, idx_u = np.unique(emask_g[indices], return_index = True)
+
+        #construct a set of unique indices
+        indices_u = (indices[0][idx_u],indices[1][idx_u])
+
+        #replace values in emask with values in prev_emask
+        for i in range(values_u.shape[0]):
+            r = indices_u[0][i]
+            c = indices_u[1][i]
+            idxs = where(emask2 == emask_g[r,c])
+            emask[idxs] = prev_emask_g[r,c]
+
+        #save emask to hdf5file
+        femask['emask'][i] = emask
+        femask['spots'][i] = emask.max()
+
+def nonzeromax(arr):
+    """
+    """
+    from numpy import nanmax, nonzero, where
+    idx = where(arr != 0)
+    if idx[0].shape[0] > 0:
+        return nanmax(arr[idx])
+    else:
+        return None
+
+def nonzeromin(arr):
+    """
+    """
+    from numpy import nanmin, nonzero, where, nan
+    idx = where(arr != 0)
+    if idx[0].shape[0] > 0:
+        return nanmin(arr[idx])
+    else:
+        return None
+
+def get_mono12packed_conversion_mask(length):
+    from numpy import vstack, tile, hstack, arange
+    b0 = 2**hstack((arange(4,12,1),arange(4)))
+    b1 = 2**arange(12)
+    b = vstack((b0,b1))
+    bt = tile(b,(int((length/(2*1.5))),1)).astype('int16')
+    return bt
+
+def mono12packed_to_image(rawdata, height, witdh, mask):
+    """
+    converts FLIR raw data format Mono12Packed to an image with specified size.
+
+    Note: tested only for Mono12Packed data format
+    """
+    from numpy import vstack, tile, hstack, arange,reshape
+    data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
+    data_N8x1 = data_Nx8.flatten()
+    data_Mx12 = data_N8x1.reshape((int(rawdata.shape[0]/1.5),12))
+    data = (data_Mx12*mask).sum(axis=1)
+    return data.reshape((height,witdh)).astype('int16')
+
+def mono12p_to_image(rawdata, height, witdh):
+    """
+    converts FLIR raw data format Mono12p to an image with specified size.
+
+    Note: tested only for Mono12p data format
+    """
+    from numpy import vstack, tile, hstack, arange,reshape
+    from numpy import packbits,reshape, int16
+    data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
+    data_N8x1 = data_Nx8.flatten()
+    data_Mx12 = data_N8x1.reshape((int(rawdata.shape[0]/1.5),12))
+    data = (data_Mx12 * (2**arange(12))).sum(axis=1)
+    return data.reshape((height,witdh)).astype('int16')

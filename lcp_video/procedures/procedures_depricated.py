@@ -21,7 +21,7 @@ def compress_hdf5_file(filenames, destination_root):
 
 
 
-def get_spots_mask(data,stats_ref,stats_dark):
+def get_spots_mask(root,data,stats_ref,stats_dark):
     """
     """
     from h5py import File
@@ -29,7 +29,6 @@ def get_spots_mask(data,stats_ref,stats_dark):
     from skimage import measure
     from numpy import where, zeros_like, bool, zeros,sqrt, ones
     from time import time
-    root = '/Users/femto-13/Mirror/Data/2020.05.27/'
     stats_ref = load_from_file(root+'camera_8mm_Reference.stats.pkl')
     stats_dark = load_from_file(root+'/camera_8mm_Dark.stats.pkl')
     data = root + 'camera_8mm_Spray.gzip.hdf5'

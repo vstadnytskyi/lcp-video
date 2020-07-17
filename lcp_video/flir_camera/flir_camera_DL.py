@@ -434,7 +434,7 @@ class FlirCamera():
         elif value == 'Continuous':
             self.cam.ExposureAuto.SetValue(ExposureAuto_Continuous)
             print(f'setting gamma enable {value}')
-    def get_autoexposure(self, bool = False):
+    def get_autoexposure(self):
         value = self.cam.ExposureAuto.GetValue()
         if value == 0:
             return 'Off'
@@ -444,6 +444,7 @@ class FlirCamera():
             return 'Continuous'
         else:
             return 'unknown'
+    autoexposure = property(get_autoexposure,set_autoexposure)
 
     def set_exposure_time(self, value):
         if self.cam is not None:
@@ -478,8 +479,9 @@ class FlirCamera():
         """
         import PySpin
 
+        "Two different pixel formats: PixelFormat_Mono12p and PixelFormat_Mono12Packed"
         print('setting pixel format Mono12Packed')
-        self.cam.PixelFormat.SetValue(PixelFormat_Mono12Packed)
+        self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono12Packed)
 
         if self.cam is not None:
             if settings ==1:
@@ -604,13 +606,12 @@ class FlirCamera():
         from os import utime, rename
         from h5py import File
         while (self.recording):
-            if self.recording_pointer >= self.recording_Nframes:
+            if self.recording_pointer >= self.recording_Nframes-1:
                 self.recording_chunk_pointer += 1
                 if self.recording_chunk_pointer >= self.recording_chunk_maxpointer:
                     self.recording = False
                     break
                 self.recording_pointer = 0
-
                 rename(self.recording_basefilename + '_' + str(self.recording_chunk_pointer-1) + '.tmpraw.hdf5',self.recording_basefilename + '_' + str(self.recording_chunk_pointer-1) + '.raw.hdf5')
                 f = File(self.recording_basefilename + '_' + str(self.recording_chunk_pointer-1) + '.raw.hdf5','r')
                 timestamp = f['timestamps_lab'][0]
@@ -699,7 +700,7 @@ class FlirCamera():
         data_N8x1 = data_Nx8.flatten()
         data_Mx12 = data_N8x1.reshape((int(rawdata.shape[0]/1.5),12))
         data = (data_Mx12*mask).sum(axis=1)
-        return data.reshape((height,width)).astype('uint16')
+        return data.reshape((height,width)).astype('int16')
 
 if __name__ is '__main__':
     from PySpin import System
