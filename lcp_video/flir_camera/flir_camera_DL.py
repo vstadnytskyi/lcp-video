@@ -31,8 +31,6 @@ class FlirCamera():
         self.threads = {}
 
 
-
-
     def init(self, serial_number, settings = 1):
         from numpy import zeros, nan
         print('')
@@ -42,13 +40,19 @@ class FlirCamera():
 
 
         self.cam = self.find_camera(serial_number = serial_number)
+        try:
+            self.cam.EndAcquisition()
+            print ("Acquisition ended")
+        except PySpin.SpinnakerException as ex:
+            print("Acquisition was already ended")
+
         self.nodes = self.get_nodes()
 
         self.height = self.get_height()
         self.width = self.get_width()
-        self.img_len = int(self.height*self.width*1.5)
-        self.queue = Queue((self.queue_length,self.img_len+self.header_length), dtype = 'uint8')
-        self.last_image = zeros((self.img_len+self.header_length,), dtype = 'uint8')
+        self.img_len = int(self.height*self.width)
+        self.queue = Queue((self.queue_length,self.height+1,self.width), dtype = 'uint16')
+        self.last_image = zeros((self.queue_length,self.height+1,self.width), dtype = 'uint16')
         #Algorithms Configuration
         self.lut_enable = False
         self.gamma_enable = False
@@ -176,7 +180,7 @@ class FlirCamera():
             timestamp = image_result.GetTimeStamp()
             frameid = image_result.GetFrameID()
             # Getting the image data as a numpy array
-            image_data = image_result.GetData()
+            image_data = image_result.GetData().reshape(self.height,self.width)
             image_result.Release()
         else:
             print('No Data in get image')
@@ -481,7 +485,7 @@ class FlirCamera():
 
         "Two different pixel formats: PixelFormat_Mono12p and PixelFormat_Mono12Packed"
         print('setting pixel format Mono12Packed')
-        self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono12Packed)
+        self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono16)
 
         if self.cam is not None:
             if settings ==1:
@@ -535,21 +539,30 @@ class FlirCamera():
                 print('setting TriggerSource Software')
                 self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Software)
 
+    def convert_raw_to_image(self,raw_image):
+        """
+        """
+        from lcp_video.analysis import mono12p_to_image, mono12packed_to_image, get_mono12packed_conversion_mask
+        raw_image = raw_image[:self.img_len]
+        mask = get_mono12packed_conversion_mask(int(self.height*self.width*1.5))
+        image = mono12packed_to_image(raw_image,self.height,self.width,mask)
+        return image
+
 
 # Recording
 
-    def recording_init(self, N_frames = 1200, comments = ''):
+    def recording_init(self, N_frames = 1200, name = '',overwrite = False):
         """
         Initializes recording
         """
-        self.recording_basefilename = self.recording_root+f'{self.name}_{comments}'
+        self.recording_basefilename = self.recording_root+f'{self.name}_{name}'
         self.recording_chunk_pointer = 0
         filename = self.recording_basefilename + '_' + str(self.recording_chunk_pointer) + '.tmpraw.hdf5'
-        self.recording_create_file(filename = filename, N_frames = N_frames)
+        self.recording_create_file(filename = filename, N_frames = N_frames, overwrite = overwrite)
         self.recording_Nframes = N_frames
         self.recording_pointer = 0
 
-    def recording_create_file(self, filename, N_frames):
+    def recording_create_file(self, filename, N_frames, overwrite = False):
         """
         creates hdf5 file on a drive prior to recording
         """
@@ -557,13 +570,18 @@ class FlirCamera():
         from h5py import File
         from time import time, sleep, ctime
         from numpy import zeros
+        file_action = 'a'
         if exists(filename):
-            print('ctime(time()): ----WARNING----')
-            print('ctime(time()): The HDF5 file exists. Please delete it first!')
+            if overwrite:
+                print(f'{ctime(time())}: The HDF5 file exists but will be overwritten. The HDF5 was created. The file name is {filename}')
+                file_action = 'w'
+            else:
+                print('ctime(time()): ----WARNING----')
+                print('ctime(time()): The HDF5 file exists. Please delete it first! or use parameter overwrite = True to force deletion and creating of new file.')
         else:
             print(f'{ctime(time())}: The HDF5 was created. The file name is {filename}')
-            with File(filename,'a') as f:
-                f.create_dataset('exposure time', data = 'trigger width')
+            with File(filename,file_action) as f:
+                f.create_dataset('exposure time', data = self.exposure_time)
                 f.create_dataset('black level all', data = self.black_level['all'])
                 f.create_dataset('black level analog', data = self.black_level['analog'])
                 f.create_dataset('black level digital', data = self.black_level['digital'])
@@ -606,7 +624,8 @@ class FlirCamera():
         from os import utime, rename
         from h5py import File
         while (self.recording):
-            if self.recording_pointer >= self.recording_Nframes-1:
+            if self.recording_pointer == self.recording_Nframes:
+                #create new file
                 self.recording_chunk_pointer += 1
                 if self.recording_chunk_pointer >= self.recording_chunk_maxpointer:
                     self.recording = False
@@ -633,9 +652,15 @@ class FlirCamera():
     def recording_start(self):
         """
         a simple wrapper to start a recording_run loop in a separate thread.
+
+        stops recording threads if such are active.
+        resets queue to insure we save only new data.
         """
         from ubcs_auxiliary.multithreading import new_thread
         from time import time, sleep
+        if self.recording:
+            self.recording_stop()
+        self.queue.reset()
         self.recording = True
         self.threads['recording'] = new_thread(self.recording_run)
 
@@ -679,34 +704,15 @@ class FlirCamera():
         return array(list(binary_repr(num).zfill(m))).astype(uint8)
 
 
-    def get_conversion_mask(self):
-        from numpy import vstack, tile, hstack, arange
-        length = int(self.width*self.height*1.5)
-        b0 = 2**hstack((arange(4,12,1),arange(4)))
-        b1 = 2**arange(12)
-        b = vstack((b0,b1))
-        bt = tile(b,(int((length/(2*1.5))),1)).astype('uint16')
-        return bt
-
-    def raw_to_image(self, rawdata, height = None, width = None, mask = None):
-        from numpy import vstack, tile, hstack, arange,reshape
-        if width is None:
-            width = self.width
-        if height is None:
-            height = self.height
-        if mask is None:
-            mask = self.get_conversion_mask()
-        data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
-        data_N8x1 = data_Nx8.flatten()
-        data_Mx12 = data_N8x1.reshape((int(rawdata.shape[0]/1.5),12))
-        data = (data_Mx12*mask).sum(axis=1)
-        return data.reshape((height,width)).astype('int16')
-
 if __name__ is '__main__':
     from PySpin import System
+    from matplotlib import pyplot as plt
+    import sys
+    plt.ion()
     system = System.GetInstance()
-    camera = FlirCamera('test',system)
-    camera.get_all_cameras()
+    cam = FlirCamera('test',system)
+    cam.get_all_cameras()
+    print("a parameter can be passed when flir_camera_DL executed. example: run flir_camera_DL.py 'dmout' will inititalize camera as dmout camera.")
 
     print("camera_dm4 = FlirCamera('dm4', system)")
     print("camera_dm4.init(serial_number = '19490369')")
@@ -723,5 +729,35 @@ if __name__ is '__main__':
     print("camera_out = FlirCamera('dmout',system)")
     print("camera_out.init(serial_number = '20130136')")
     print('camera_out.start_thread()')
-    from matplotlib import pyplot as plt
-    plt.ion()
+
+    print("camera.recording_init(N_frames = 600, name = 'dataset-name', overwrite = False)")
+
+
+    if len(sys.argv)>1:
+        if sys.argv[1] == 'dm4':
+            camera_dm4 = FlirCamera('dm4', system)
+            camera_dm4.init(serial_number = '19490369')
+            camera_dm4.start_thread()
+            camera = camera_dm4
+            camera.exposure_time = 63000
+
+        elif sys.argv[1] == 'dm16':
+            camera_dm16 = FlirCamera('dm16', system)
+            camera_dm16.init(serial_number = '18159488')
+            camera_dm16.start_thread()
+            camera = camera_dm16
+            camera.exposure_time = 63000
+
+        elif sys.argv[1] == 'dm34':
+            camera_dm34 = FlirCamera('dm34', system)
+            camera_dm34.init(serial_number = '18159480')
+            camera_dm34.start_thread()
+            camera = camera_dm34
+            camera.exposure_time = 63000
+
+        elif sys.argv[1] == 'dmout':
+            camera_dmout = FlirCamera('dmout', system)
+            camera_dmout.init(serial_number = '20130136')
+            camera_dmout.start_thread()
+            camera = camera_dmout
+            camera.exposure_time = 31500

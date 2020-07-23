@@ -17,7 +17,7 @@ def get_list_of_files(source, suffix = '.hdf5', has = ''):
         lst_res.append(lst[idx[i]])
     return lst_res
 
-def move_files_with_compression(source, destination, extension = '.raw.hdf5', has = ''):
+def move_files_with_compression(source, destination, extension = '.raw.hdf5', has = '', compression_opt = 4):
     """
     move all 'extension' files that have 'has' in their names from the 'source' directory to the 'destination' direcory with decoding and compression.
 
@@ -51,7 +51,7 @@ def move_files_with_compression(source, destination, extension = '.raw.hdf5', ha
                 for key in list(f.keys()):
                     data = f[key]
                     if key == 'images':
-                        fnew.create_dataset(key, data=data, compression='gzip', chunks=(1,200,256), dtype='int16')
+                        fnew.create_dataset(key, data=data, compression='gzip', chunks=(1,200,256), dtype='int16',compression_opt = compression)
                     else:
                         fnew.create_dataset(key, data = data)
             timestamp = f['timestamps'][0]
@@ -63,7 +63,7 @@ def move_files_with_compression(source, destination, extension = '.raw.hdf5', ha
         os.rename(destination+prefix+'.tmpdata.hdf5',destination+prefix+'.data.hdf5')
         os.remove(source+filename)
 
-def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', has = '', N = 0, compression = True):
+def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', has = '', N = 0, compression = True, reverse = True):
     """
     move all 'extension' files that have 'has' in their names from the 'source' directory to the 'destination' direcory with decoding and compression. This procedure converts flat .raw. files to image format.
 
@@ -93,6 +93,8 @@ def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', 
     from lcp_video.analysis import mono12p_to_image, mono12packed_to_image, get_mono12packed_conversion_mask
 
     lst = get_list_of_files(source = source, suffix = suffix, has = has, pixel_format = 'Mono12Packed')
+    if reverse:
+        lst = lst[::-1]
     def once(lst):
         import os
         from time import time, ctime
@@ -491,12 +493,15 @@ def check_dataset(root, has = '', extension = ''):
     from h5py import File
     from numpy import asarray, concatenate
     filenames = get_list_of_files(root,suffix = extension, has = has)
-    timestamps = []
+    timestamps_camera = []
+    timestamps_lab = []
     for filename in filenames:
         f = File(root+filename,'r')
-        timestamps.append(f['timestamps_camera'][()])
-    timestamps_result = concatenate(asarray(timestamps))
-    return timestamps_result
+        timestamps_camera.append(f['timestamps_camera'][()])
+        timestamps_lab.append(f['timestamps_lab'][()])
+    timestamps_camera_result = concatenate(asarray(timestamps_camera))
+    timestamps_lab_result = concatenate(asarray(timestamps_lab))
+    return timestamps_camera_result, timestamps_lab_result
 
 def change_hdf5(root,namelist):
     """
@@ -600,6 +605,14 @@ def generate_emask_from_mask(root,filename):
 
     with File(root+filename.split('.')[0]+'.emask.hdf5', 'a') as femask:
         N_spot_max = 0
+        i = 0
+        mask = fmask['masks'][i]
+        emask = label(mask,ones((3,3),bool))[0]
+        idx = where(emask != 0)
+        emask[idx] += N_spot_max
+        N_spot_max = emask.max()
+        femask['emasks'][i] = emask
+        femask['spots'][i] = emask.max()
         for i in range(1,length,1):
             prev_mask = fmask['masks'][i-1]
             prev_emask = femask['emasks'][i-1]
@@ -640,6 +653,19 @@ def generate_emask_from_mask(root,filename):
             femask['emasks'][i] = emask
             femask['spots'][i] = emask.max()
         femask.create_dataset('Nmax', data = N_spot_max)
+
+
+def copy_emaks_to_particle(root, filename):
+    """
+    """
+    from h5py import File
+    femask = File(root+filename.split('.')[0]+'.emask.hdf5', 'r')
+    fdata = File(root+filename.split('.')[0]+'.data.hdf5', 'r')
+    width = fdata['image width'][()]
+    height = fdata['image height'][()]
+    length = fdata['images'].shape[0]
+    with File(root+filename.split('.')[0]+'.particle.hdf5', 'a') as fparticle:
+        fparticle.create_dataset('particles', (length,height,width), data  = femask['emasks'], chunks = (1,height,width), dtype = 'int32', compression = 'gzip', compression_opts = 9)
 
 def generate_table_from_emask(root, filename):
     """

@@ -26,10 +26,38 @@ def mask_testdata():
 
     return data
 
+def convert_mask_to_pixeltable(mask):
+    """
+    converts binary mask to pixel table.
 
+    keys: frame, row, col, Z
+    """
 
+    from numpy import where, concatenate, delete
 
+    length = int(mask.sum())
 
+    # Create an initial array
+    dic = {}
+    dic['rows'] = zeros((0,))
+    dic['cols'] = zeros((0,))
+    dic['frames'] = zeros((0,))
+    dic['spots'] = zeros((0,))
+
+    for i in range(mask.shape[0]):
+        msk = mask[i]
+        idx = where(msk == 1)
+        rows = idx[0]
+        cols = idx[1]
+        frames = idx[0]*0+i
+        spots = frame = idx[0]*0
+
+        dic['rows'] = concatenate((dic['rows'],rows))
+        dic['cols'] = concatenate((dic['cols'],cols))
+        dic['frames'] = concatenate((dic['frames'],frames))
+        dic['spots'] = concatenate((dic['spots'],spots))
+
+    return dic
 
 def ellipse_mask(a,b,x0,y0,theta,image):
     """Returns elliptical mask of radii (a,b) with rotation theta (in degrees)
