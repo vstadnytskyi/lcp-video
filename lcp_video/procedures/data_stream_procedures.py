@@ -166,7 +166,7 @@ def run_once(source, destination, camera, term, repeat = False, newest_first = F
     import os
     filename_raw = find_recent_filename(source, include = [camera,term,'.raw.'], exclude = [], newest_first = False)
     root, tail = os.path.split(filename_raw)
-    head = .join(tail.split('_')[:-1])
+    head = ''.join(tail.split('_')[:-1])
     filename_hits = os.path.join(destination,tail).replace('.raw.hdf5','.hits.hdf5')
     filename_stats = os.path.join(source,head+'.stats.pkl')
     filename_roi = os.path.join(destination,tail).replace('.raw.hdf5','.roi.hdf5')
