@@ -27,6 +27,64 @@ def get_moments(image):
     from cv2 import moments
     return moments(image)
 
+def get_binary_moments(mask):
+    """
+    returns moments calculate from a binary mask provided. Uses cv2 (opencv-python) library.
+
+    returns a dictionary of moments:
+    'm00', 'm10', 'm01', 'm20', 'm11', 'm02', 'm30', 'm21', 'm12', 'm03', 'mu20', 'mu11', 'mu02', 'mu30', 'mu21', 'mu12', 'mu03
+    ', 'nu20', 'nu11', 'nu02', 'nu30', 'nu21', 'nu12', 'nu03'
+
+    Parameters
+    ----------
+    data :: (numpy array)
+        data to append
+
+    Returns
+    -------
+    moments :: (dictionary)
+
+    Examples
+    --------
+    >>> moments = get_moments(image = image)
+    """
+    from cv2 import moments
+    from math import sqrt
+    from math import atan as arctan
+    m = moments(mask)
+
+    m['mu00'] = m['m00']
+    size = mask.sum()
+    result = m
+    if size > 1:
+        col_center = m['m10']/m['m00']
+        row_center = m['m01']/m['m00']
+    else:
+        idx = np.where(mask == 1)
+        row_center = idx[0][0]
+        col_center = idx[1][0]
+
+    mu_p_20 = m['mu20']/m['m00']
+    mu_p_02 = m['mu02']/m['m00']
+    mu_p_11 = m['mu11']/m['m00']
+    if mu_p_20-mu_p_02 != 0:
+        theta = 0.5*arctan((2*mu_p_11)/(mu_p_20-mu_p_02))
+    else:
+        theta = 0
+
+    lambdap = 0.5*((mu_p_20+mu_p_02)+sqrt(4*mu_p_11**2 + (mu_p_20-mu_p_02)**2))
+    lambdam = 0.5*((mu_p_20+mu_p_02)-sqrt(4*mu_p_11**2 + (mu_p_20-mu_p_02)**2))
+
+    result['col_center'] = col_center
+    result['row_center'] = row_center
+    result['size'] = size
+
+    result['theta'] = theta
+    result['lambdap'] = lambdap
+    result['lambdam'] = lambdam
+
+    return result
+
 def grow_mask(mask,count=1):
     """Expands area where pixels have value=1 by 'count' pixels in each
     direction, including along the diagonal. If count is 1 or omitted a single
@@ -201,7 +259,7 @@ def distance_matrix(vector):
     return matrix
 
 
-def analuse_spot(data, mask):
+def analyse_spot(data, mask):
     """
     returns moments calculate from an image provided. Uses cv2 (opencv-python) library.
 
@@ -958,20 +1016,35 @@ def get_mono12packed_conversion_mask(length):
     bt = tile(b,(int((length/(2*1.5))),1)).astype('int16')
     return bt
 
-def mono12packed_to_image(rawdata, height, witdh, mask):
+def get_mono12p_conversion_mask(length):
+    from numpy import vstack, tile, hstack, arange
+    b0 = 2**arange(12)
+    bt = tile(b0,(int((length/(1.5))),1)).astype('int16')
+    return bt
+
+def get_mono12p_conversion_mask_8bit(length):
+    from numpy import vstack, tile, hstack, arange
+    b0 = 2**arange(8)
+    bt = tile(b0,(int((length/(1))),1)).astype('uint8')
+    return bt
+
+def mono12packed_to_image(rawdata, height, width, mask= None, mask8= None):
     """
     converts FLIR raw data format Mono12Packed to an image with specified size.
 
     Note: tested only for Mono12Packed data format
     """
     from numpy import vstack, tile, hstack, arange,reshape
-    data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
+    if mask8 is not None:
+        data_Nx8 = ((rawdata.reshape((-1,1)) & (mask8)) != 0)
+    else:
+        data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
     data_N8x1 = data_Nx8.flatten()
     data_Mx12 = data_N8x1.reshape((int(rawdata.shape[0]/1.5),12))
     data = (data_Mx12*mask).sum(axis=1)
-    return data.reshape((height,witdh)).astype('int16')
+    return data.reshape((height,width)).astype('int16')
 
-def mono12p_to_image(rawdata, height, witdh):
+def mono12p_to_image_old(rawdata, height, width, mask = None, mask8= None):
     """
     converts FLIR raw data format Mono12p to an image with specified size.
 
@@ -979,8 +1052,213 @@ def mono12p_to_image(rawdata, height, witdh):
     """
     from numpy import vstack, tile, hstack, arange,reshape
     from numpy import packbits,reshape, int16
-    data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
+    if mask8 is not None:
+        data_Nx8 = ((rawdata.reshape((-1,1)) & (mask8)) != 0)
+    else:
+        data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
     data_N8x1 = data_Nx8.flatten()
-    data_Mx12 = data_N8x1.reshape((int(rawdata.shape[0]/1.5),12))
-    data = (data_Mx12 * (2**arange(12))).sum(axis=1)
-    return data.reshape((height,witdh)).astype('int16')
+    data_Mx12 = data_N8x1.reshape((int(rawdata.shape[-1]*length/1.5),12))
+    if mask is not None:
+        data = (data_Mx12 * mask).T.sum(axis=0)
+    else:
+        data = (data_Mx12 * (2**arange(12))).sum(axis=1)
+    return data.reshape((length,height,width)).astype('int16')
+
+def mono12p_to_image(rawdata, height, width, mask = None, mask8= None):
+    """
+    converts FLIR raw data format Mono12p to an image with specified size.
+
+    Note: tested only for Mono12p data format
+    """
+    from numpy import vstack, tile, hstack, arange,reshape
+    from numpy import right_shift,bitwise_and,empty
+
+    arr = rawdata.reshape(-1,3)
+    byte_even = arr[:,0]+256*(bitwise_and(arr[:,1],15))
+    byte_odd = right_shift(arr[:,1],4) + right_shift(256*arr[:,2],4)
+    img = empty(height*width,dtype='int16')
+    img[0::2] = byte_even
+    img[1::2] = byte_odd
+    return img
+
+u12_to_16 = mono12p_to_image
+
+def dm16_mask():
+    """
+    2020.07.29 creates a dm16 camera mask to take care of scattering at the input slit.
+    """
+    from numpy import zeros,indices
+    mask = zeros((3000,4096),bool)
+    y_indices,x_indices = indices((mask.shape))
+    mask0 = y_indices > 1068-(94/979)*(x_indices-2921)
+    mask1 = y_indices < 1792+(94/979)*(x_indices-2921)
+    mask2 = x_indices > 2898
+    mask3 = x_indices > 3900
+    return ((mask0 & mask1) & mask2) | mask3
+
+def generate_table_from_emask(emask, f_num):
+    """
+    generates the catalog of all unique spots in the frames(from .emask. file) and saves into .table.
+
+    Simple header: [frame, particle, r, c, size]
+
+    ----------
+    root :: (string)
+    filename :: (string)
+
+    Returns
+    -------
+
+    Examples
+    --------
+    >>> from ubcs_auxiliary.multiprocessing import new_process
+    >>> new_process(gererate_table_from_emask,'/mnt/data/', dmout_breathing_1.emask.hdf5')
+    """
+    from h5py import File
+    import numpy as np
+    from cv2 import moments
+    from time import time, ctime, sleep
+
+    header =  ['frame', 'spot', 'track', 'row_center', 'col_center','size']
+    minvalue = np.min(emask[emask != 0])
+    maxvalue = np.max(emask[emask != 0])
+    length = maxvalue
+    table = {}
+    for key in header:
+        table[key] = np.zeros((length,))
+    if emask.any() > 0:
+        for spot in range(minvalue-1,maxvalue,1):
+            mask = (emask == (spot+1))
+            size = mask.sum()
+            if size > 1:
+                m = moments(mask.astype('int16'))
+                col_center = m['m10']/m['m00']
+                row_center = m['m01']/m['m00']
+            else:
+                idx = np.where(mask == 1)
+                row_center = idx[0][0]
+                center_col = idx[1][0]
+
+            table['frame'][spot] = int(f_num)
+            table['spot'][spot] = int(spot)
+            table['track'][spot]  = 0
+            table['row_center'][spot] = row_center
+            table['col_center'][spot] = col_center
+            table['size'][spot] = size
+    return table
+
+def images_hits_reconstruct(roi_name,frame=-1):
+    """Reconstructs images and hits from roi and hits_coord. If frame = -1,
+    returns 3D versions; if a non-negative integer returns image and hits for a
+    single frame specified by 'frame'."""
+    from numpy import zeros
+    from time import time
+    import h5py
+    t0 = time()
+    f = h5py.File(roi_name,'r')
+    shape = f['shape']
+    mask = f['mask']
+    hits_coord = f['hits_coord']
+    roi = f['roi']
+    hits = zeros(shape,bool)
+    hits[tuple(hits_coord)] = True
+    if frame == -1:
+        images = zeros(shape,dtype='int16')
+        images[:,mask] = roi
+        images = images.reshape(shape)
+    else:
+        hits = hits[frame]
+        shape = f['mask'].shape
+        images = zeros(shape,dtype='int16')
+        images[mask] = roi[frame]
+    print('time to reconstruct images,hits [s]: {:0.3f}'.format(time()-t0))
+    return images,hits
+
+def maxima_from_image(image, hits, stats, offset = None, footprint = 3):
+    """
+    finds maxima in the image.
+    returns cmax, a boolean numpy array with all maxima.
+    """
+
+    from numpy import left_shift, right_shift, ones
+    from scipy.ndimage import maximum_filter, median_filter, minimum_filter
+    from lcp_video.analysis import grow_mask
+    if offset is None:
+        offset = offset_image(shape = image.shape)
+    image = image*grow_mask(hits,1)
+    image_4 = (left_shift(image,4)- offset)*grow_mask(hits,1)
+    mxma = maximum_filter(image_4 , footprint = ones((footprint,footprint)))
+    bckg_foot = ones((footprint,footprint))
+    bckg_foot[1,1] = 0
+    flat_foot = ones((footprint,footprint))
+    hits_med = right_shift(median_filter((image), footprint = bckg_foot),4)
+    hits_max = right_shift(maximum_filter((image), footprint = flat_foot),4)
+    mxma_mask = (mxma==image_4)*hits
+    res_bckg_med = right_shift(hits_med,4)*mxma_mask
+    res_mxma = right_shift(mxma,4)*mxma_mask
+    z = (image - hits_med)*hits/stats['var']
+    return res_mxma, z
+
+def offset_image(shape = (3000,4096)):
+    """
+    """
+    from numpy import array, tile
+    template = array([[0,1,2,3],[4,5,6,7],[8,9,10,11],[12,13,14,15]])
+    rows = shape[0]
+    cols = shape[1]
+    offset = tile(template,(int(rows/4),int(cols/4)))[:rows,:cols]
+    return offset
+
+
+
+def maxima_from_vector(image, hits, stats, offset = None, footprint = 3):
+    pass
+
+def distance_matrix(row,col):
+    from numpy import zeros, meshgrid,sqrt
+    # vectorized form, might use more RAM
+    row_i, row_j = meshgrid(row, row, sparse=True)
+    row_m = ((row_i-row_j)**2)
+    col_i, col_j = meshgrid(col, col, sparse=True)
+    col_m = ((col_i-col_j)**2)
+    matrix = sqrt(row_m + col_m)
+    del col_m, row_m, row_i, row_j,col_i, col_j
+    # matrix = zeros((length,length), dtype = 'uint16')+65535
+    # for i in range(length):
+    #     for j in range(length):
+    #         r = (rows[i] - rows[j])*10
+    #         c = (cols[i] - cols[j])*10
+    #         matrix[i,j] = int((r**2 + c**2)**0.5)
+    return matrix
+
+def nearest_neibhour(row,col,rfn,N, frame, return_zero = False):
+    """
+    input parameters
+    rows
+    cols
+    frames
+
+    Possible improvements: I can try to get part of the
+    """
+    from numpy import zeros, nan, nanmin, amin, ones, sqrt, where, argsort
+    from lcp_video.analysis import distance_matrix
+    idx = (rfn == frame)
+    matrix = distance_matrix(row*10,col*10)
+    matrix_argsort = argsort(matrix,axis=0)
+    #matrix_sort = np.sort(matrix,axis=1)
+    sorted_idx = matrix_argsort[:N+2,:]
+    dic = {}
+    if return_zero:
+        start = 0
+    else:
+        start = 1
+    for i in range(start,N+1):
+        if i<sorted_idx[:].shape[0]:
+            dic[f'row{i}'] = row[sorted_idx[i]].astype('int16')
+            dic[f'col{i}'] = col[sorted_idx[i]].astype('int16')
+            dic[f'rfn{i}'] = rfn[sorted_idx[i]].astype('int16')
+        else:
+            dic[f'row{i}'] = 5000
+            dic[f'col{i}'] = 5000
+            dic[f'rfn{i}'] = 0
+    return dic

@@ -17,7 +17,7 @@ def get_list_of_files(source, suffix = '.hdf5', has = ''):
         lst_res.append(lst[idx[i]])
     return lst_res
 
-def move_files_with_compression(source, destination, extension = '.raw.hdf5', has = '', compression_opt = 4):
+def move_files_with_compression(source, destination, suffix = '.raw.hdf5', has = '', compression = '', compression_opts = 4):
     """
     move all 'extension' files that have 'has' in their names from the 'source' directory to the 'destination' direcory with decoding and compression.
 
@@ -51,10 +51,15 @@ def move_files_with_compression(source, destination, extension = '.raw.hdf5', ha
                 for key in list(f.keys()):
                     data = f[key]
                     if key == 'images':
-                        fnew.create_dataset(key, data=data, compression='gzip', chunks=(1,200,256), dtype='int16',compression_opt = compression)
+                        if compression == 'gzip':
+                            fnew.create_dataset(key, data=data, dtype='int16',compression = compression, compression_opts = compression_opts)
+                        elif compression == 'lzf':
+                            fnew.create_dataset(key, data=data, dtype='int16',compression = compression)
+                        else:
+                            fnew.create_dataset(key, data=data, dtype='int16')
                     else:
                         fnew.create_dataset(key, data = data)
-            timestamp = f['timestamps'][0]
+            timestamp = f['timestamps_lab'][0]
         t2 = time()
         print(ctime(time()),f'time: {t2-t1} with size {os.path.getsize(source+filename)/(1024*1024)}, speed {os.path.getsize(source+filename)/((t2-t1)*1024*1024)} MB/s')
         print(f'removing file {source+filename}')
@@ -63,7 +68,7 @@ def move_files_with_compression(source, destination, extension = '.raw.hdf5', ha
         os.rename(destination+prefix+'.tmpdata.hdf5',destination+prefix+'.data.hdf5')
         os.remove(source+filename)
 
-def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', has = '', N = 0, compression = True, reverse = True):
+def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', has = '', N = 0, compression = True, reverse = True, pixel_format = ''):
     """
     move all 'extension' files that have 'has' in their names from the 'source' directory to the 'destination' direcory with decoding and compression. This procedure converts flat .raw. files to image format.
 
@@ -90,9 +95,9 @@ def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', 
     from h5py import File
     from numpy import copy
     from ubcs_auxiliary.multiprocessing import new_child_process
-    from lcp_video.analysis import mono12p_to_image, mono12packed_to_image, get_mono12packed_conversion_mask
+    from lcp_video.analysis import mono12p_to_image, mono12packed_to_image, get_mono12packed_conversion_mask,get_mono12p_conversion_mask_8bit, get_mono12p_conversion_mask
 
-    lst = get_list_of_files(source = source, suffix = suffix, has = has, pixel_format = 'Mono12Packed')
+    lst = get_list_of_files(source = source, suffix = suffix, has = has)
     if reverse:
         lst = lst[::-1]
     def once(lst):
@@ -100,8 +105,12 @@ def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', 
         from time import time, ctime
         from h5py import File
         from numpy import copy
-        if pixel_format == 'Mono12Packed':
-            mask = get_mono12packed_conversion_mask(int(width*height*1.5))
+        with File(source+lst[0],'r') as f:
+            width = f['image width'][()]
+            height = f['image height'][()]
+            length = 1
+            pixel_format = f['pixel format'][()]
+
         for filename in lst:
             prefix = filename.split('.raw.hdf5')[0]
             print(ctime(time()),f'moving file....')
@@ -111,19 +120,20 @@ def move_flat_files_with_compression(source, destination, suffix = '.raw.hdf5', 
             with File(source+filename,'r') as f:
                 width = f['image width'][()]
                 height = f['image height'][()]
+                length = 1
                 with File(destination+prefix+'.tmpdata.hdf5','a') as fnew:
                     for key in list(f.keys()):
-                        data = f[key][()]
+                        data = f[key]
                         if key == 'images':
                             if compression:
                                 fnew.create_dataset(key,(data.shape[0],height,width), compression='gzip', chunks=(1,height/8,width/8), dtype='int16')
                             else:
                                 fnew.create_dataset(key,(data.shape[0],height,width), chunks=(1,height/8,width/8), dtype='int16')
                             for i in range(data.shape[0]):
-                                if pixel_format == 'Mono12Packed':
-                                    fnew['images'][i] = mono12packed_to_image(data[i],height,width,mask)
-                                else:
-                                    fnew['images'][i] = mono12p_to_image(datai,height,width)
+                                if pixel_format == 'mono12p':
+                                    fnew['images'][i] = mono12p_to_image(data[i],height,width).reshape((height,width))
+                                elif pixel_format == 'mono12p_16':
+                                    fnew['images'][i] = data[i].reshape((height,width))
                         else:
                             fnew.create_dataset(key, data = data)
 
@@ -571,7 +581,7 @@ def generate_mask_from_stats(root,filename):
     print(f'{ctime(time())} Done')
 
 
-def generate_emask_from_mask(root,filename):
+def generate_emask_from_mask(source,destination,filename, mask_exclude = None):
     """
     Generates an enumerated mask(.emask.) from a binary mask (.mask.) file
 
@@ -590,23 +600,26 @@ def generate_emask_from_mask(root,filename):
     """
     from ubcs_auxiliary.save_load_object import load_from_file
     from h5py import File
-    from numpy import zeros, where, ones,unique
+    from numpy import zeros, where, ones,unique, ones_like
     from time import time, ctime
     from scipy.ndimage import label
     from ubcs_auxiliary.numerical import grow_mask
-    fdata = File(root+filename.split('.')[0]+'.data.hdf5', 'r')
-    fmask = File(root+filename.split('.')[0]+'.mask.hdf5', 'r')
+    fdata = File(source['data']+filename.split('.')[0]+'.data.hdf5', 'r')
+    fmask = File(source['hits']+filename.split('.')[0]+'.hits.hdf5', 'r')
+    if mask_exclude is None:
+        mask_exclude = ones_like(f['hits2'][()])
+
     width = fdata['image width'][()]
     height = fdata['image height'][()]
     length = fdata['images'].shape[0]
-    with File(root+filename.split('.')[0]+'.emask.hdf5', 'a') as femask:
+    with File(destination+filename.split('.')[0]+'.emask.hdf5', 'a') as femask:
         femask.create_dataset('emasks', (length,height,width), chunks = (1,height,width), dtype = 'int32', compression = 'gzip', compression_opts = 9)
         femask.create_dataset('spots', (length,),dtype = 'int32')
 
-    with File(root+filename.split('.')[0]+'.emask.hdf5', 'a') as femask:
+    with File(destination+filename.split('.')[0]+'.emask.hdf5', 'a') as femask:
         N_spot_max = 0
         i = 0
-        mask = fmask['masks'][i]
+        mask = fmask['hits3'][i]*mask_exclude
         emask = label(mask,ones((3,3),bool))[0]
         idx = where(emask != 0)
         emask[idx] += N_spot_max
@@ -614,9 +627,9 @@ def generate_emask_from_mask(root,filename):
         femask['emasks'][i] = emask
         femask['spots'][i] = emask.max()
         for i in range(1,length,1):
-            prev_mask = fmask['masks'][i-1]
+            prev_mask = fmask['hits3'][i-1]
             prev_emask = femask['emasks'][i-1]
-            mask = fmask['masks'][i]
+            mask = fmask['hits3'][i]*mask_exclude
 
             #create new enumarated mask. start enumeration from the last value in the previous emask.
             emask = label(mask,ones((3,3),bool))[0]
@@ -688,49 +701,42 @@ def generate_table_from_emask(root, filename):
     from h5py import File
     import numpy as np
     from cv2 import moments
-    from time import time, ctime,sleep
+    from time import time, ctime, sleep
     table_filename = root+filename.split('.')[0]+'.table.hdf5'
     emask_filename = root+filename.split('.')[0]+'.emask.hdf5'
     femask = File(emask_filename, 'r')
     Nmax = femask['Nmax'][()]
     spots = femask['spots'][()]
-    header =  [b'frame', b'spot', b'track', b'row_center', b'col_center',b'size']
+    header =  ['frame', 'spot', 'track', 'row_center', 'col_center','size','lambdap','lambdam','theta','positive']
 
     entry = np.zeros((6,))
     with File(table_filename, 'a') as ftable:
         table = ftable.create_group("table")
-        table.create_dataset('frame', (Nmax,), compression = 'gzip')
-        table.create_dataset('spot', (Nmax,), compression = 'gzip')
-        table.create_dataset('track', (Nmax,), compression = 'gzip')
-        table.create_dataset('row_center', (Nmax,), compression = 'gzip')
-        table.create_dataset('col_center', (Nmax,), compression = 'gzip')
-        table.create_dataset('size', (Nmax,), compression = 'gzip')
+        for item in header:
+            table.create_dataset(item, (Nmax,))
 
         i = 0
         spot= 0
         for frame in range(spots.shape[0]):
             emask = femask['emasks'][frame]
+            print(f'{ctime(time())}, frame {frame}')
             if emask.any() > 0:
                 minvalue = np.min(emask[emask != 0])
                 maxvalue = np.max(emask[emask != 0])
                 for spot in range(minvalue,maxvalue+1,1):
                     mask = (emask == spot)
-                    size = mask.sum()
-                    if size > 1:
-                        m = moments(mask.astype('int16'))
-                        center_col = m['m10']/m['m00']
-                        center_row = m['m01']/m['m00']
-                    else:
-                        idx = np.where(mask == 1)
-                        center_row = idx[0][0]
-                        center_col = idx[1][0]
+                    mom = get_binary_moments(mask)
 
                     table['frame'][i] = frame
                     table['spot'][i] = spot
                     table['track'][i]  = 0
-                    table['row_center'][i] = center_row
-                    table['col_center'][i] = center_col
-                    table['size'][i] = size
+                    table['row_center'][i] = m['row_center']
+                    table['col_center'][i] = m['col_center']
+                    table['size'][i] =  m['size']
+                    table['lambdap'][i] = m['lambdap']
+                    table['lambdam'][i] = m['lambdam']
+                    table['size'][i] = m['theta']
+                    table['positive'][i] = 1
                     i+=1
 
 def find_overlapping_spots_in_table(filename):
@@ -806,3 +812,307 @@ def show_usage():
     print("from ubcs_auxiliary.multiprocessing import new_child_process")
     print("new_child_process(function,arg1,arg2, kwarg1 = 'keyword value', kwarg2 = 1234)")
     print("----------------------------------------")
+
+def create_one_big_hdf5(root,prefix):
+    """
+    a procedure design to fix a problem with skipped images.
+    """
+    from h5py import File
+    #step1 create massive file
+    #
+def get_complete_sorted_list(root, term, extension):
+    """
+    returns complete sorted list from a directory. the procedure designed to fix problems with skipped images.
+    """
+
+    import os
+    from numpy import argsort, array
+    #files = [os.path.join(root,file) for file in os.listdir(root)]
+    files = os.listdir(root)
+    selected = []
+    for file in files:
+        if (term in file) and (extension in file):
+            selected.append(file)
+    repeat = []
+    for file in selected:
+        repeat.append(int(file.split('_')[-1].split('.')[0]))
+    repeat_arr = array(repeat)
+    selected_arr = array(selected)
+    idx_sorted = argsort(repeat_arr)
+    selected_sorted = selected_arr[idx_sorted]
+
+    return selected_sorted
+
+def copy_file_skipped_images(source, destination,lst):
+    """
+    """
+    from time import time, ctime
+    from h5py import File
+    import os
+    from numpy import arange, array
+    import numpy as np
+    files_src = [os.path.join(source,file) for file in lst]
+    files_dst = [os.path.join(destination,file) for file in lst]
+
+    keys_float = ['black level all', 'black level analog', 'black level digital', 'exposure time', 'gain', 'image height', 'image width', 'temperature', 'time']
+    keys_arr = ['timestamps_camera', 'timestamps_lab']
+
+    fsrc_0 = File(files_src[0],'r')
+    start_ID = fsrc_0['frameIDs'][0]
+
+    frameIDs = array([])
+    chunks = array([])
+    arr_zeros = np.zeros((256,))
+    for i in range(len(files_src)):
+        fsrc = File(files_src[i],'r')
+        frameIDs = np.concatenate((frameIDs,fsrc['frameIDs']))
+        chunks = np.concatenate((chunks,arr_zeros+i))
+    fsrcs = []
+    for i in range(len(files_dst)):
+        fsrcs.append(File(files_src[i],'r'))
+    for i in range(len(files_dst)):
+        fsrc = File(files_src[i],'r')
+        print(ctime(time()),i)
+        new_frameIDs = arange(0+i*(256),256*(i+1),1)+start_ID
+        curr_frameIDs = fsrc['frameIDs']
+        with File(files_dst[i],'w') as fdst:
+            for key in keys_float:
+                fdst.create_dataset(key,data = fsrc[key][()])
+            for key in keys_arr:
+                fdst.create_dataset(key,fsrc[key].shape)
+            for key in ['images']:
+                fdst.create_dataset(key,fsrc[key].shape, dtype = 'int16')
+            for key in ['frameIDs']:
+                fdst.create_dataset(key,data = new_frameIDs)
+            for frameID in list(fdst['frameIDs']):
+                if frameID != 0.0:
+                    idx = np.where(frameIDs == frameID)
+                    chunk = int(chunks[idx][0])
+                    idx_src = np.where(fsrcs[chunk]['frameIDs'][()] == frameID)
+                    image = fsrcs[chunk]['images'][idx_src]
+                    timestamp_camera = fsrcs[chunk]['timestamps_camera'][idx_src]
+                    timestamp_lab = fsrcs[chunk]['timestamps_lab'][idx_src]
+
+
+                    idx_dst = np.where(fdst['frameIDs'][()] == frameID)
+                    fdst['images'][idx_dst] = image
+                    fdst['timestamps_camera'][idx_dst] = timestamp_camera
+                    fdst['timestamps_lab'][idx_dst] = timestamp_lab
+
+def update_hdf5_neighbours_dataset(filename, filename_destination = None, N = 5):
+    """
+    updates the input hdf5 file specified by 'filename' with new keys related to nearest neighbours. if filename_destination is left None, the original file will be updated.
+
+    example: update_hdf5_neighbours_dataset('/Data/2020.08.10/dm4_singing-1.stats2.hdf5')
+    """
+    def get_neighbours_dataset(filename, N = 5):
+        """
+        N - number of neighbours to return
+        """
+        from lcp_video import analysis
+        from numpy import empty
+        import numpy as np
+        from h5py import File
+        from time import ctime,sleep, time
+        f_stats = File(filename,'r')
+        row = f_stats['row0'][()]
+        col = f_stats['col0'][()]
+        rfn = f_stats['rfn'][()]
+        peak = f_stats['peak'][()].astype('bool')
+        f_stats.close()
+
+        lst = []
+        for i in range(1,N+1):
+            lst.append(f'row{i}')
+            lst.append(f'col{i}')
+            lst.append(f'rfn{i}')
+
+        result_dic = {}
+        for item in lst:
+            result_dic[item] = np.empty(peak.shape,dtype='int32')
+
+        # print(f"------------")
+        # print(f"{ctime(time())}, processing frame {i}")
+        for frame in range(rfn[1],rfn[-1]):
+            slctr_i = (rfn == frame)&peak
+            if frame%1000 == 0:
+                print(ctime(time()),frame,f'out of total = {rfn[-1]}')
+            slctr_pmi = ((rfn == frame-1)|(rfn == frame)|(rfn == frame+1))&peak
+            if slctr_i.sum()>0:
+                row2 = np.copy(row[slctr_pmi]).astype('float64')
+                col2 = np.copy(col[slctr_pmi]).astype('float64')
+                rfn2 = np.copy(rfn[slctr_pmi]).astype('float64')
+
+                row_i, row_j = np.meshgrid(row2, row2, sparse=True)
+                row_m = ((row_i-row_j)**2)
+                col_i, col_j = np.meshgrid(col2, col2, sparse=True)
+                col_m = ((col_i-col_j)**2)
+                matrix = np.sqrt(row_m + col_m)
+                matrix_argsort = np.argsort(matrix,axis=0)
+                #matrix_sort = np.sort(matrix,axis=1)
+                sorted_idx = matrix_argsort[:N+2,:]
+                dic = {}
+                idx = (rfn2 == frame)
+
+                for k in range(1,N+1):
+                    try:
+                        dic[f'row{k}'] = row2[sorted_idx[k]].astype('int16')
+                        dic[f'col{k}'] = col2[sorted_idx[k]].astype('int16')
+                        dic[f'rfn{k}'] = rfn2[sorted_idx[k]].astype('int16')
+                    except:
+                        pass
+                for key in list(dic.keys()):
+                    result_dic[key][slctr_i] = dic[key][idx]
+        return result_dic
+
+    with File(filename,'r') as fstats:
+        row = fstats['row0'][()]
+        col = fstats['col0'][()]
+        rfn = fstats['rfn'][()]
+
+    result_dic = {}
+    for i in range(1,N+1):
+        result_dic['col{i}'] = np.empty(col.shape,dtype=col.dtype)
+        result_dic['row1{i}'] = np.empty(row.shape,dtype=row.dtype)
+        result_dic['rfn{i}'] = np.empty(rfn.shape,dtype='int32')
+
+
+    result_dic = get_neighbours_dataset(filename)
+
+    if filename_destination is None:
+        filename_destination = filename
+    with File(filename_destination,'a') as fdest:
+        for key in result_dic.keys():
+            if key in fdest:
+                print(f"{key} dataset exists. rewriting")
+                fdest[key] = result_dic[key]
+            else:
+                print(f"{key} dataset doesn't exists. creating and writing")
+                fdest.create_dataset(key, data = result_dic[key])
+
+
+def stats_from_chunk(reference,sigma=6):
+    """Returns mean, var, and threshold (in counts) for reference. The mean
+    and var are calculated after omitting the largest and smallest values
+    found for each pixel, which assumes few particles in the laser
+    sheet. The threshold statistic corresponds to the specified sigma level.
+    Adding 0.5 to var helps compensate for digitization error so that false
+    positives in the light sheet approximately match that outside the light
+    sheet. The threshold for pixels defined by 'mask' are reset to 4095, which
+    ensures they won't contribute to hits."""
+    from lcp_video.procedures.analysis_functions import poisson_array,dm16_mask,images_from_file,save_to_file
+    from numpy import sqrt,ceil,cast,array,zeros_like
+    from time import time
+    from os import path
+    t0=time()
+    if '.data.' in reference: stats_name = reference.replace('.data.hdf5','.stats.pkl')
+    if '.raw.'  in reference: stats_name = reference.replace('.raw.hdf5','.stats.pkl')
+    if  path.exists(stats_name):
+        stats = load_from_file(stats_name)
+        median = stats['median']
+        mean = stats['mean']
+        var = stats['var']
+        threshold = stats['threshold']
+    else:
+        print('Processing {} ... please wait'.format(reference))
+        # Load images and sort in place to minmimze memory footprint
+        images = images_from_file(reference)
+        images.sort(axis=0)
+        mask = zeros_like(images[0])
+        if 'dm16' in reference: mask = dm16_mask()
+        # Compute median, then mean and var after omitting smallest and largest values.
+        N = len(images)
+        M = int(N/2)
+        median = images[M]
+        mean = images[1:-1].mean(axis=0,dtype='float32')
+        var = images[1:-1].var(axis=0,dtype='float32')
+        # Compute std_ratio; used to rescale stdev.
+        std_ratio = []
+        for i in range(10000):
+            dist = poisson_array(3,N,sort=True)
+            std_ratio.append(dist.std()/dist[1:-1].std())
+        std_ratio_mean = array(std_ratio).mean()
+        # Compute threshold to nearest larger integer; recast as int16.
+        threshold = ceil(mean + sigma*std_ratio_mean*sqrt(var+0.5))
+        threshold = cast['int16'](threshold) - median
+        threshold[mask] = 4095
+        save_to_file(stats_name,{'median':median,'mean':mean,'var':var,'threshold':threshold})
+    print('time to execute stats_from_chunk [s]: {:0.1f}'.format(time()-t0))
+    return median,mean,var,threshold
+
+def find_pathnames(root,terms):
+    """Searches 'root' and finds files that contains 'terms', which is a list
+    of strings, i.e., ['dm16','.data.hdf5']. Returns list os sorted according
+    to file timestamps."""
+    from numpy import argsort,array
+    from os import path,listdir
+    from os.path import getmtime
+    files = [path.join(root,file) for file in listdir(root)]
+    select = terms
+    selected = []
+    [selected.append(file) for file in files if all([term in file for term in select])]
+    path_names = selected.copy()
+    if len(path_names) > 0:
+        creation_times = [getmtime(file) for file in path_names]
+        sort_order = argsort(creation_times)
+        path_names = array(path_names)[sort_order]
+    return path_names
+
+
+def images_hits_reconstruct(roi_name,frame=-1):
+    """Reconstructs images and hits from roi and hits_coord. If frame = -1,
+    returns 3D versions; if a non-negative integer, returns image and hits for a
+    single frame specified by 'frame'."""
+    from numpy import zeros
+    #from time import time
+    import h5py
+    #t0 = time()
+    with h5py.File(roi_name,'r') as f:
+        shape = f['shape'][()]
+        mask = f['mask'][()]
+        hits_coord = f['hits_coord'][()]
+        roi = f['roi'][()]
+    hits = zeros(shape,bool)
+    hits[tuple(hits_coord)] = True
+    if frame == -1:
+        images = zeros(shape,dtype='int16')
+        images[:,mask] = roi
+        images = images.reshape(shape)
+    else:
+        hits = hits[frame]
+        images = zeros(mask.shape,dtype='int16')
+        images[mask] = roi[frame]
+    #print('time to reconstruct images,hits [s]: {:0.3f}'.format(time()-t0))
+    return images,hits
+
+
+
+def inspect_stats_file(filename):
+    """
+    """
+    from h5py import File
+    from matplotlib import pyplot as plt
+    from ubcs_auxiliary import numerical
+    filename = '/net/femto-data2/C/covid19Data/Data/2020.08.13/dm4_ethanol-peg.stats.hdf5'
+    filename_ref = '/net/femto-data2/C/covid19Data/Data/2020.08.14/dm4_reference-set.stats.hdf5'
+
+    with File(filename,'r') as f:
+        counts= f['counts'][()]
+        rfn0 = f['rfn0'][()]
+        sat = f['sat'][()]
+        chunk = f['chunk'][(0)]
+        peak = f['peak'][()]
+
+
+
+
+    with File(filename_ref,'r') as f:
+        counts_ref= f['counts'][()]
+        rfn0_ref = f['rfn0'][()]
+        sat_ref = f['sat'][()]
+        chunk_ref = f['chunk'][(0)]
+        peak_ref = f['peak'][()]
+
+plt.figure()
+plt.plot(rfn0[peak],counts[peak],'.', color = 'r')
+plt.plot(rfn0_ref[peak_ref],counts_ref[peak_ref],'.', color = 'b')

@@ -2,9 +2,11 @@
 from time import time, sleep
 from numpy import zeros, right_shift, array, copy
 import PySpin
+from logging import debug, info, warning, error
 
 from PySpin import PixelFormat_Mono16,PixelFormat_Mono12Packed
-
+import sys
+import os
 class FlirCamera():
 
     def __init__(self, name = None, system = None):
@@ -15,7 +17,7 @@ class FlirCamera():
         self.system = system
 
         #Acquisition
-        self.queue_length = 64
+        self.queue_length = 32
         self.acquiring = False
         self.header_length = 4096
 
@@ -26,50 +28,78 @@ class FlirCamera():
         self.recording = False
         self.recording_pointer = 0
         self.recording_chunk_pointer = 0
-        self.recording_chunk_maxpointer = 1024
+        self.recording_chunk_maxpointer = 65535
+
+        self.write_to_hdf5_benchmark = []
+
+
 
         self.threads = {}
 
 
     def init(self, serial_number, settings = 1):
-        from numpy import zeros, nan
-        print('')
-        print('-------------INITIALIZING NEW CAMERA-----------')
+        from numpy import zeros, nan, ones
+        info('')
+        info('-------------INITIALIZING NEW CAMERA-----------')
         import PySpin
         from circular_buffer_numpy.queue import Queue
-
 
         self.cam = self.find_camera(serial_number = serial_number)
         try:
             self.cam.EndAcquisition()
             print ("Acquisition ended")
         except PySpin.SpinnakerException as ex:
-            print("Acquisition was already ended")
+            info("Acquisition was already ended")
 
         self.nodes = self.get_nodes()
 
+        #Transport Configuration
+        self.configure_transport()
+
+        #Configure Image Format
+        self.configure_image()
+
+        #Analog Configuration
+        self.conf_acq_and_trigger(settings=settings)
+
         self.height = self.get_height()
         self.width = self.get_width()
-        self.img_len = int(self.height*self.width)
-        self.queue = Queue((self.queue_length,self.height+1,self.width), dtype = 'uint16')
-        self.last_image = zeros((self.queue_length,self.height+1,self.width), dtype = 'uint16')
+        if (self.pixel_format == 'mono12p'):
+            from lcp_video.analysis import get_mono12p_conversion_mask,get_mono12p_conversion_mask_8bit
+            self.img_len = int(self.height*self.width*1.5)
+            self.images_dtype = 'uint8'
+            self.conversion_mask = get_mono12p_conversion_mask(self.img_len)
+            self.conversion_mask8 = get_mono12p_conversion_mask_8bit(self.img_len)
+        elif (self.pixel_format == 'mono12packed'):
+            from lcp_video.analysis import get_mono12packed_conversion_mask,get_mono12p_conversion_mask_8bit
+            self.img_len = int(self.height*self.width*1.5)
+            self.images_dtype = 'uint8'
+            self.conversion_mask = get_mono12packed_conversion_mask(self.img_len)
+            self.conversion_mask8 = get_mono12p_conversion_mask_8bit(self.img_len)
+        elif self.pixel_format == 'mono16' or self.pixel_format == 'mono12p_16':
+            self.img_len = int(self.height*self.width)
+            self.images_dtype = 'int16'
+        self.queue = Queue((self.queue_length,self.img_len+self.header_length), dtype = self.images_dtype)
+        self.last_raw_image = zeros((self.img_len+self.header_length,), dtype = self.images_dtype)
+
+        from circular_buffer_numpy.circular_buffer import CircularBuffer
+        self.hits_buffer = CircularBuffer((1350000,2),dtype = 'float64')
+
+
+
         #Algorithms Configuration
         self.lut_enable = False
         self.gamma_enable = False
         self.autoexposure = 'Off'
         self.autogain = 'Off'
 
-        #Transport Configuration
-        self.configure_transport()
 
-        #Analog Configuration
-        self.conf_acq_and_trigger(settings=settings)
 
         try:
             self.cam.AcquisitionStop()
-            print ("Acquisition stopped")
+            info("Acquisition stopped")
         except PySpin.SpinnakerException as ex:
-            print("Acquisition was already stopped")
+            info("Acquisition was already stopped")
 
 
 
@@ -78,10 +108,26 @@ class FlirCamera():
         self.gain = 0
         self.black_level = 15
 
+        self.image_threshold = zeros((self.height,self.width))+7
 
-        self.background = zeros((self.height+1,self.width))
-        self.background[:self.height,:] = 15
-        self.background_flag = True
+        self.image_median = zeros((self.height,self.width))
+        self.image_median[:,:]= 15
+
+        self.image_mean = zeros((self.height,self.width))
+        self.image_mean[:,:]= 15
+        self.image_mean_flag = True
+
+        self.image_std = ones((self.height,self.width))
+        self.image_std[:,:] = 0.8
+        self.image_std_flag = True
+
+        self.sigma_level = 6
+
+        self.mask = zeros((self.height,self.width),dtype ='bool')
+        self.mask_flag = True
+
+        self.last_frameID = -1
+        self.num_of_missed_frames = 0
 
 
 
@@ -106,7 +152,7 @@ class FlirCamera():
             self.cam.AcquisitionStop()
             print ("Acquisition stopped")
         except PySpin.SpinnakerException as ex:
-            print("Acquisition was already stopped")
+            info("Acquisition was already stopped")
         self.cam.UserSetSelector.SetValue(PySpin.UserSetSelector_Default)
         self.cam.UserSetLoad()
 
@@ -116,10 +162,10 @@ class FlirCamera():
         cam.TLStream.StreamBufferHandlingMode.SetValue(PySpin.StreamBufferHandlingMode_OldestFirst )
         cam.TLStream.StreamBufferCountMode.SetValue(PySpin.StreamBufferCountMode_Manual )
         cam.TLStream.StreamBufferCountManual.SetValue(10)
-        print(f"Buffer Handling Mode: {cam.TLStream.StreamBufferHandlingMode.GetCurrentEntry().GetSymbolic()}")
-        print( f"Buffer Count Mode: {cam.TLStream.StreamBufferCountMode.GetCurrentEntry().GetSymbolic()}")
-        print(f"Buffer Count: {cam.TLStream.StreamBufferCountManual.GetValue()}")
-        print(f"Max Buffer Count: {cam.TLStream.StreamBufferCountManual.GetMax()}")
+        info(f"Buffer Handling Mode: {cam.TLStream.StreamBufferHandlingMode.GetCurrentEntry().GetSymbolic()}")
+        info( f"Buffer Count Mode: {cam.TLStream.StreamBufferCountMode.GetCurrentEntry().GetSymbolic()}")
+        info(f"Buffer Count: {cam.TLStream.StreamBufferCountManual.GetValue()}")
+        info(f"Max Buffer Count: {cam.TLStream.StreamBufferCountManual.GetMax()}")
 
     def deinit(self):
         self.stop_acquisition()
@@ -133,10 +179,10 @@ class FlirCamera():
         cam = None
         cam_list = self.system.GetCameras()
         num_cameras = cam_list.GetSize()
-        print(f'found {num_cameras} cameras')
+        info(f'found {num_cameras} cameras')
         for i,cam in enumerate(cam_list):
             sn = cam.TLDevice.DeviceSerialNumber.GetValue()
-            print(f'sn = {sn}')
+            info(f'sn = {sn}')
             if serial_number == sn:
                 break
         cam_list.Clear()
@@ -145,11 +191,11 @@ class FlirCamera():
     def get_all_cameras(self):
         cam_list = self.system.GetCameras()
         num_cameras = cam_list.GetSize()
-        print(f'found {num_cameras} cameras')
+        info(f'found {num_cameras} cameras')
         cameras = []
         for i,cam in enumerate(cam_list):
             sn = cam.TLDevice.DeviceSerialNumber.GetValue()
-            print(f'sn = {sn}')
+            info(f'sn = {sn}')
             cameras.append(sn)
         cam_list.Clear()
         return cameras
@@ -169,28 +215,70 @@ class FlirCamera():
         return nodes
 
 
-    def get_background(self):
-        from numpy import mean
-        self.background = mean(self.queue.buffer, axis = 0)
+    def get_image_background(self,N=0):
+        """
+        function that acquires N images and calculates M1, M2 and threshold images.
+        """
+        from time import ctime, time, sleep
+        import os
+        from numpy import sqrt
+
+        from lcp_video.procedures.procedures import stats_from_chunk,find_pathnames
+        # Load or compute stats for first chunk in dataset.
+        info(f'starting acquiring background image file')
+        camera.recording_stop();
+        old_recording_chunk_maxpointer = self.recording_chunk_maxpointer
+        self.recording_chunk_maxpointer = 2
+        sleep(1);
+        string = ctime().replace(' ','-').replace(':','-')
+        self.recording_init(N_frames = 256, name = f'background-{string}', overwrite = True);
+        self.queue.reset();
+        self.recording_start()
+        filename = self.recording_basefilename+'_0.raw.hdf5'
+        while not os.path.exists(filename):
+            sleep(1)
+        camera.recording_stop()
+        os.remove(self.recording_basefilename+'_1.tmpraw.hdf5')
+        self.recording_chunk_maxpointer = old_recording_chunk_maxpointer
+        # analysing raw file and creating .stats. and returning
+        root = camera.recording_root
+        terms = [self.recording_basefilename,'.raw.hdf5']
+        median,mean,var,threshold = stats_from_chunk(find_pathnames(root,terms)[0])
+        self.image_mean = mean
+        self.image_std = sqrt(var)
+        self.image_var = var
+        self.image_median = median
+        self.image_threshold = threshold
+
+        info(f'starting acquiring background image file')
 
     def get_image(self):
-        self.last_image *= 0
+        from lcp_video.analysis import mono12p_to_image
+        self.last_raw_image *= 0
         if self.acquiring:
             image_result = self.cam.GetNextImage()
             timestamp = image_result.GetTimeStamp()
             frameid = image_result.GetFrameID()
+            if (self.last_frameID != -1) and ((frameid-self.last_frameID) != 1):
+                self.num_of_missed_frames += frameid-self.last_frameID
+            self.last_frameID = frameid
             # Getting the image data as a numpy array
-            image_data = image_result.GetData().reshape(self.height,self.width)
+            image_res = image_result.GetData()
+            if self.pixel_format == 'mono12p_16':
+                image_data = mono12p_to_image(image_res, self.height, self.width)
+            else:
+                image_data = image_res
             image_result.Release()
         else:
-            print('No Data in get image')
+            info('No Data in get image')
             image_data = zeros((self.height*self.width,))
+
         pointer = self.img_len
-        self.last_image[:pointer] = image_data
-        self.last_image[pointer:pointer+64] = self.get_image_header(value =int(time()*1000000), length = 64)
-        self.last_image[pointer+64:pointer+128] = self.get_image_header(value = timestamp, length = 64)
-        self.last_image[pointer+128:pointer+192] = self.get_image_header(value = frameid, length = 64)
-        return self.last_image
+        self.last_raw_image[:pointer] = image_data
+        self.last_raw_image[pointer:pointer+64] = self.get_image_header(value =int(time()*1000000), length = 64)
+        self.last_raw_image[pointer+64:pointer+128] = self.get_image_header(value = timestamp, length = 64)
+        self.last_raw_image[pointer+128:pointer+192] = self.get_image_header(value = frameid, length = 64)
+        return self.last_raw_image
 
     def get_image_header(self,value = None, length = 4096):
         from time import time
@@ -204,25 +292,26 @@ class FlirCamera():
         arr[0,:64] = bin_array(t,64)
         return arr
 
-    def binarr_to_number(self,arr):
-        num = 0
-        from numpy import flip
-        arr = flip(arr)
-        length = arr.shape[0]
-        for i in range(length):
-           num += (2**(i))*arr[i]
-        return num
-
     def bin_array(num, m):
         from numpy import uint8, binary_repr,array
         """Convert a positive integer num into an m-bit bit vector"""
         return array(list(binary_repr(num).zfill(m))).astype(uint8)
 
     def run_once(self):
+        from time import time
+        from numpy import zeros
+        from lcp_video.analysis import mono12p_to_image
         if self.acquiring:
-            img = self.get_image()
-            data = img.reshape(1,self.img_len+4096)
-            self.queue.enqueue(data)
+            raw = self.get_image().reshape(1,self.img_len+4096)
+            self.queue.enqueue(raw)
+            if not self.recording:
+                self.last_reshaped_image = mono12p_to_image(raw[0,:self.img_len],self.height,self.width).reshape((self.height,self.width))
+                hits = ((self.last_reshaped_image>(self.image_threshold+self.image_median))*~self.mask).sum()
+                arr = zeros((1,2))
+                arr[0,0] = time()
+                arr[0,1] = hits;from EPICS_CA.CAServer import casput;casput(f'{self.name.upper()}_CAMERA:HITS.RBV',hits)
+                self.hits_buffer.append(arr)
+
 
     def run(self):
         while self.acquiring:
@@ -267,8 +356,12 @@ class FlirCamera():
             self.cam.EndAcquisition()
             print ("Acquisition ended")
         except PySpin.SpinnakerException as ex:
-            print("Acquisition was already ended")
+            info("Acquisition was already ended")
 
+    def io_put(self):
+        pass
+    def io_get(self):
+        pass
 
     def get_black_level(self):
         self.cam.BlackLevelSelector.SetValue(0)
@@ -336,7 +429,7 @@ class FlirCamera():
 
     def get_serial_number(self):
         import PySpin
-        device_serial_number = PySpin.CStringPtr(self.nodemap_tldevice.GetNode('DeviceSerialNumber'))
+        device_serial_number = cam.TLDevice.DeviceSerialNumber.GetValue()
         return device_serial_number
 
     def get_acquisition_mode(self):
@@ -353,7 +446,7 @@ class FlirCamera():
             mode = single_frame
         elif value == 'MultiFrame':
             mode = multi_frame
-        print(f'setting acquisition mode {value}')
+        info(f'setting acquisition mode {value}')
         self.stop_acquisition()
         node.SetIntValue(mode)
         self.start_acquisition()
@@ -370,7 +463,7 @@ class FlirCamera():
         """
         """
         if self.cam is not None:
-            print('setting Look Up Table Enable to False')
+            info('setting Look Up Table Enable to False')
             self.cam.LUTEnable.SetValue(value)
     lut_enable = property(get_lut_enable,set_lut_enable)
 
@@ -387,7 +480,7 @@ class FlirCamera():
         """
         if self.cam is not None:
             self.cam.GammaEnable.SetValue(value)
-        print(f'setting gamma enable {value}')
+        info(f'setting gamma enable {value}')
     gamma_enable = property(get_gamma_enable,set_gamma_enable)
 
     def get_gamma(self):
@@ -403,7 +496,7 @@ class FlirCamera():
         if self.cam is not None:
             result = None
             #self.cam.Gamma.SetValue(value)
-        print(f'setting gamma {value}')
+        info(f'setting gamma {value}')
     gamma = property(get_gamma,set_gamma)
 
     def get_height(self):
@@ -420,9 +513,10 @@ class FlirCamera():
             reply = nan
         return reply
 
+
     def set_exposure_mode(self,mode = None):
         from PySpin import ExposureMode_Timed, ExposureMode_TriggerWidth
-        print(f'Setting up ExposureMode to {mode}')
+        info(f'Setting up ExposureMode to {mode}')
         if self.cam is not None:
             if mode == "Timed":
                 self.cam.ExposureMode.SetValue(ExposureMode_Timed)
@@ -437,7 +531,7 @@ class FlirCamera():
             self.cam.ExposureAuto.SetValue(ExposureAuto_Once)
         elif value == 'Continuous':
             self.cam.ExposureAuto.SetValue(ExposureAuto_Continuous)
-            print(f'setting gamma enable {value}')
+            info(f'setting gamma enable {value}')
     def get_autoexposure(self):
         value = self.cam.ExposureAuto.GetValue()
         if value == 0:
@@ -458,7 +552,10 @@ class FlirCamera():
             pass
     def get_exposure_time(self,):
         if self.cam is not None:
-            return self.cam.ExposureTime.GetValue()
+            try:
+                return self.cam.ExposureTime.GetValue()
+            except:
+                return -1
         else:
             return nan
         self._exposure_time = value
@@ -469,6 +566,77 @@ class FlirCamera():
         software trigger for camera
         """
         self.cam.TriggerSoftware()
+
+    def configure_image(self):
+        import PySpin
+
+        "Two different pixel formats: PixelFormat_Mono12p and PixelFormat_Mono12Packed"
+        info(f'setting pixel format {self.pixel_format}')
+        if self.pixel_format=='mono12p' or self.pixel_format=='mono12p_16':
+            try:
+                self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono12p)
+            except:
+                info('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono12p)')
+
+        elif self.pixel_format =='mono12packed':
+            try:
+                self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono12Packed)
+            except:
+                info('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono12Packed)')
+        elif self.pixel_format =='mono16':
+            try:
+                self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono16)
+            except:
+                info('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono16)')
+
+        width_max = self.cam.WidthMax.GetValue()
+        height_max = self.cam.HeightMax.GetValue()
+
+        old_offset_x = self.cam.OffsetX.GetValue()
+        old_offset_y = self.cam.OffsetY.GetValue()
+        new_offset_x = self.ROI_offset_x
+        new_offset_y = self.ROI_offset_y
+
+        old_width = self.cam.Width.GetValue()
+        old_height = self.cam.Height.GetValue()
+        new_height = self.ROI_height
+        new_width = self.ROI_width
+        try:
+            if new_offset_x <= old_offset_x:
+                info(f'setting ROI_offset_x: {self.ROI_offset_x}')
+                self.cam.OffsetX.SetValue(self.ROI_offset_x)
+                info(f'setting ROI_width: {self.ROI_width}')
+                self.cam.Width.SetValue(self.ROI_width)
+            else:
+                info(f'setting ROI_width: {self.ROI_width}')
+                self.cam.Width.SetValue(self.ROI_width)
+                info(f'setting ROI_offset_x: {self.ROI_offset_x}')
+                self.cam.OffsetX.SetValue(self.ROI_offset_x)
+            if new_offset_y <= old_offset_y:
+                info(f'setting ROI_offset_x: {self.ROI_offset_y}')
+                self.cam.OffsetY.SetValue(self.ROI_offset_y)
+                info(f'setting ROI_width: {self.ROI_width}')
+                self.cam.Height.SetValue(self.ROI_height)
+            else:
+                info(f'setting ROI_width: {self.ROI_width}')
+                self.cam.Width.SetValue(self.ROI_width)
+                info(f'setting ROI_offset_x: {self.ROI_offset_x}')
+                self.cam.OffsetX.SetValue(self.ROI_offset_x)
+
+            info(f'setting ROI_offset_x: {self.ROI_offset_x}')
+            self.cam.OffsetX.SetValue(self.ROI_offset_x)
+            info(f'setting ROI_width: {self.ROI_width}')
+            self.cam.Width.SetValue(self.ROI_width)
+
+            info(f'setting ROI_height: {self.ROI_height}')
+            self.cam.Height.SetValue(self.ROI_height)
+            info(f'setting ROI_offset_y: {self.ROI_offset_y}')
+            self.cam.OffsetY.SetValue(self.ROI_offset_y)
+        except:
+            pass
+
+
+
 
     def conf_acq_and_trigger(self, settings = 1):
         """
@@ -481,71 +649,77 @@ class FlirCamera():
         TriggerMode = On
         TriggerSelector = FrameStart
         """
-        import PySpin
 
-        "Two different pixel formats: PixelFormat_Mono12p and PixelFormat_Mono12Packed"
-        print('setting pixel format Mono12Packed')
-        self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono16)
 
         if self.cam is not None:
             if settings ==1:
-                print('Acquisition and Trigger Settings: 1')
-                print('setting continuous acquisition mode')
+                info('Acquisition and Trigger Settings: 1')
+                info('setting continuous acquisition mode')
                 self.cam.AcquisitionMode.SetIntValue(PySpin.AcquisitionMode_Continuous)
-                print('setting frame rate enable to False')
+                info('setting frame rate enable to False')
                 self.cam.AcquisitionFrameRateEnable.SetValue(False)
 
-
-
-                print('setting TriggerSource Line0')
+                info('setting TriggerSource Line0')
                 self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Line0)
-                print('setting TriggerMode On')
+                info('setting TriggerMode On')
                 self.cam.TriggerMode.SetIntValue(PySpin.TriggerMode_On)
 
-                print('setting TriggerSelector FrameStart')
+                info('setting TriggerSelector FrameStart')
                 self.cam.TriggerSelector.SetValue(PySpin.TriggerSelector_FrameStart)
-                print('setting TriggerActivation RisingEdge')
+                info('setting TriggerActivation RisingEdge')
                 self.cam.TriggerActivation.SetValue(PySpin.TriggerActivation_RisingEdge)
-                print('setting TriggerOverlap ReadOnly ')
+                info('setting TriggerOverlap ReadOnly ')
                 self.cam.TriggerOverlap.SetValue(PySpin.TriggerOverlap_ReadOut)
 
 
             elif settings ==2:
-                print('Acquisition and Trigger Settings: 2')
-                print('setting SingleFrame acquisition mode')
+                info('Acquisition and Trigger Settings: 2')
+                info('setting SingleFrame acquisition mode')
                 self.cam.AcquisitionMode.SetIntValue(PySpin.AcquisitionMode_SingleFrame)
-                print('setting frame rate enable to False')
+                info('setting frame rate enable to False')
                 self.cam.AcquisitionFrameRateEnable.SetValue(False)
 
-                print('setting frame rate enable to False')
+                info('setting frame rate enable to False')
                 self.cam.AcquisitionFrameRateEnable.SetValue(False)
-                print('setting TriggerMode On')
+                info('setting TriggerMode On')
                 self.cam.TriggerMode.SetIntValue(PySpin.TriggerMode_Off)
 
 
             elif settings == 3:
-                print('Acquisition and Trigger Settings: 3 (software)')
-                print('setting continuous acquisition mode')
+                info('Acquisition and Trigger Settings: 3 (software)')
+                info('setting continuous acquisition mode')
                 self.cam.AcquisitionMode.SetIntValue(PySpin.AcquisitionMode_Continuous)
 
-                print('setting frame rate enable to True')
+                info('setting frame rate enable to True')
                 self.cam.AcquisitionFrameRateEnable.SetValue(True)
-                print('setting frame rate to 1')
+                info('setting frame rate to 1')
                 self.cam.AcquisitionFrameRate.SetValue(20.0)
-                print('setting TriggerMode Off')
+                info('setting TriggerMode Off')
                 self.cam.TriggerMode.SetIntValue(PySpin.TriggerMode_Off)
-                print('setting TriggerSource Line0')
+                info('setting TriggerSource Line0')
                 self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Line0)
-                print('setting TriggerSource Software')
+                info('setting TriggerSource Software')
                 self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Software)
 
-    def convert_raw_to_image(self,raw_image):
+    def convert_raw_to_image(self,rawdata):
         """
         """
-        from lcp_video.analysis import mono12p_to_image, mono12packed_to_image, get_mono12packed_conversion_mask
-        raw_image = raw_image[:self.img_len]
-        mask = get_mono12packed_conversion_mask(int(self.height*self.width*1.5))
-        image = mono12packed_to_image(raw_image,self.height,self.width,mask)
+        from lcp_video.analysis import mono12p_to_image, mono12packed_to_image
+        from numpy import right_shift
+
+        rawdata = rawdata[:self.img_len]
+        if self.pixel_format == 'mono12p':
+            mask = self.conversion_mask
+            mask8 = self.conversion_mask8
+            image = mono12packed_to_image(rawdata=rawdata,height=self.height,width=self.width,mask=mask,mask8=mask8)
+        elif self.pixel_format == 'mono12packed':
+            mask = self.conversion_mask
+            mask8 = self.conversion_mask8
+            image = mono12packed_to_image(rawdata=rawdata,height=self.height,width=self.width,mask=mask,mask8=mask8)
+        elif self.pixel_format == 'mono16':
+            image = right_shift(rawdata,4).reshape((self.height,self.width))
+        elif self.pixel_format == 'mono12p_16':
+            image = rawdata.reshape((self.height,self.width))
         return image
 
 
@@ -573,27 +747,30 @@ class FlirCamera():
         file_action = 'a'
         if exists(filename):
             if overwrite:
-                print(f'{ctime(time())}: The HDF5 file exists but will be overwritten. The HDF5 was created. The file name is {filename}')
+                info(f'The HDF5 file exists but will be overwritten. The HDF5 was created. The file name is {filename}')
                 file_action = 'w'
             else:
-                print('ctime(time()): ----WARNING----')
-                print('ctime(time()): The HDF5 file exists. Please delete it first! or use parameter overwrite = True to force deletion and creating of new file.')
+                info(f' ----WARNING----')
+                info(f' The HDF5 file exists. Please delete it first! or use parameter overwrite = True to force deletion and creating of new file.')
         else:
-            print(f'{ctime(time())}: The HDF5 was created. The file name is {filename}')
+            info(f': The HDF5 was created. The file name is {filename}')
             with File(filename,file_action) as f:
+                f.create_dataset('pixel format', data = self.pixel_format)
                 f.create_dataset('exposure time', data = self.exposure_time)
                 f.create_dataset('black level all', data = self.black_level['all'])
                 f.create_dataset('black level analog', data = self.black_level['analog'])
                 f.create_dataset('black level digital', data = self.black_level['digital'])
                 f.create_dataset('image width', data = self.width)
                 f.create_dataset('image height', data = self.height)
+                f.create_dataset('image offset x', data = self.ROI_offset_x)
+                f.create_dataset('image offset y', data = self.ROI_offset_y)
                 f.create_dataset('gain', data = self.gain)
                 f.create_dataset('time', data = ctime(time()))
                 f.create_dataset('temperature', data = self.temperature)
-                f.create_dataset('images', (N_frames,self.img_len), dtype = 'uint8', chunks = (1,self.img_len))
+                f.create_dataset('images', (N_frames,self.img_len), dtype = self.images_dtype, chunks = (1,self.img_len))
                 f.create_dataset('timestamps_lab', (N_frames,) , dtype = 'float64')
                 f.create_dataset('timestamps_camera', (N_frames,) , dtype = 'float64')
-                f.create_dataset('frameIDs', (N_frames,) , dtype = 'float64')
+                f.create_dataset('frameIDs', (N_frames,) , dtype = 'int64')
         self.recording_filename = filename
 
     def record_once(self,filename,N):
@@ -601,6 +778,7 @@ class FlirCamera():
         records a sequence of N frames.
         """
         from h5py import File
+        from time import time
         images = self.queue.dequeue(N)
         if images.shape[0] > 0:
             with File(filename,'a') as f:
@@ -614,7 +792,7 @@ class FlirCamera():
                     f['frameIDs'][pointer] = frameID
                     self.recording_pointer += 1
         else:
-            print(f'{self.name}: got empty array from deque with rear value in the queue of {self.queue.rear}')
+            info(f'{self.name}: got empty array from deque with rear value in the queue of {self.queue.rear}')
 
     def recording_run(self):
         """
@@ -647,7 +825,7 @@ class FlirCamera():
             else:
                 sleep((N+3)*0.051)
         self.recording = False
-        print(ctime(time()),f'Recording Loop is finished')
+        info(f'Recording Loop is finished')
 
     def recording_start(self):
         """
@@ -660,6 +838,7 @@ class FlirCamera():
         from time import time, sleep
         if self.recording:
             self.recording_stop()
+            sleep(1)
         self.queue.reset()
         self.recording = True
         self.threads['recording'] = new_thread(self.recording_run)
@@ -703,13 +882,28 @@ class FlirCamera():
         from numpy import uint8, binary_repr,array
         return array(list(binary_repr(num).zfill(m))).astype(uint8)
 
+def read_config_file(filename):
+    import yaml
+    import os
+    flag =  os.path.isfile(filename)
+    info(f'the file {filename} exists {flag}. Reading config file...')
+    if flag:
+        with open(filename,'r') as handle:
+            config = yaml.safe_load(handle.read())  # (2)
+    else:
+        config = {}
+    return config, flag
 
 if __name__ is '__main__':
-    from PySpin import System
-    from matplotlib import pyplot as plt
-    import sys
-    plt.ion()
-    system = System.GetInstance()
+    from tempfile import gettempdir
+    import logging
+    if len(sys.argv)>1:
+        logging.basicConfig(filename=gettempdir()+f"/{sys.argv[1]}_flir_camera_DL.log", level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
+    else:
+        logging.basicConfig(filename=gettempdir()+f"/unknown_flir_camera_DL.log", level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
+    system = PySpin.System.GetInstance()
     cam = FlirCamera('test',system)
     cam.get_all_cameras()
     print("a parameter can be passed when flir_camera_DL executed. example: run flir_camera_DL.py 'dmout' will inititalize camera as dmout camera.")
@@ -734,30 +928,25 @@ if __name__ is '__main__':
 
 
     if len(sys.argv)>1:
-        if sys.argv[1] == 'dm4':
-            camera_dm4 = FlirCamera('dm4', system)
-            camera_dm4.init(serial_number = '19490369')
-            camera_dm4.start_thread()
-            camera = camera_dm4
-            camera.exposure_time = 63000
+        config, flag = read_config_file(sys.argv[1])
+        if flag:
 
-        elif sys.argv[1] == 'dm16':
-            camera_dm16 = FlirCamera('dm16', system)
-            camera_dm16.init(serial_number = '18159488')
-            camera_dm16.start_thread()
-            camera = camera_dm16
-            camera.exposure_time = 63000
+            camera = FlirCamera(config['name'], system)
+            camera.pixel_format = config['pixel_format']
 
-        elif sys.argv[1] == 'dm34':
-            camera_dm34 = FlirCamera('dm34', system)
-            camera_dm34.init(serial_number = '18159480')
-            camera_dm34.start_thread()
-            camera = camera_dm34
-            camera.exposure_time = 63000
+            camera.ROI_width = int(config['ROI_width'])
+            camera.ROI_height = int(config['ROI_height'])
+            camera.ROI_offset_x = int(config['ROI_offset_x'])
+            camera.ROI_offset_y = int(config['ROI_offset_y'])
+            nice = int(config['nice'])
+            camera.nice = nice
+            info(f'setting up nice {nice}')
+            if nice != 0:
+                os.nice(nice)
+            sn = str(config['serial_number'])
+            camera.init(serial_number = sn)
+            camera.start_thread()
 
-        elif sys.argv[1] == 'dmout':
-            camera_dmout = FlirCamera('dmout', system)
-            camera_dmout.init(serial_number = '20130136')
-            camera_dmout.start_thread()
-            camera = camera_dmout
-            camera.exposure_time = 31500
+            camera.set_exposure_time(config['exposure_time'])
+        else:
+            info('configuration file cannot be found')

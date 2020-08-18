@@ -7,3 +7,4 @@ from . import analysis
 from . import audio
 from . import video
 from . import plotting
+from . import benchmarks

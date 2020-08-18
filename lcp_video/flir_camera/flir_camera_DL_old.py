@@ -3,7 +3,7 @@ from time import time, sleep
 from numpy import zeros, right_shift, array, copy
 import PySpin
 
-from PySpin import PixelFormat_Mono16,PixelFormat_Mono12Packed
+from PySpin import PixelFormat_Mono16,PixelFormat_Mono12Packed, PixelFormat_Mono12p
 
 class FlirCamera():
 
@@ -53,7 +53,7 @@ class FlirCamera():
             print("Acquisition was already stopped")
 
         print('setting pixel format Mono11Packed')
-        self.cam.PixelFormat.SetValue(PixelFormat_Mono12Packed)
+        self.cam.PixelFormat.SetValue(PixelFormat_Mono12p)
 
         self.set_exposure_mode('Timed')
         self.exposure_time = 63000 #53500

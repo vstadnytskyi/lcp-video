@@ -331,9 +331,7 @@ class GUI(wx.Frame):
 ##        self.buffer_text.SetLabel(str(DAQ.RingBuffer.buffer[:,DAQ.RingBuffer.pointer])+'\n'+ str(DAQ.RingBuffer.pointer) +' : '+ str(time()))
 
     def onQuit(self,event):
-        #FIXIT uncomment all
-        #icarus_AL.GUI_running = False
-        #icarus_AL.kill()
+        camera.kill()
         del self
         os._exit(1)
 
@@ -423,9 +421,9 @@ class GuiBackend():
         if cam is None:
             w = 4096
             h = 3000
-            image = random.randint(2**12, size=(w, h), dtype = 'int16')
+            image = random.randint(2**7, size=(int(w*h*1.5),), dtype = 'int16')
         else:
-            image = mean(cam.queue.peek_last_N(15), axis = 0)
+            image = mean(cam.queue.peek_last_N(15)[:self.camera.img_len], axis = 0)
         return image
 
     def update_moments(self, m = None):
@@ -464,13 +462,9 @@ class GuiBackend():
         self.camera.recording_start()
 
     def set_background(self):
-        from time import sleep
-        length = self.camera.queue.shape[0]
-        self.camera.queue.reset()
-        while self.camera.queue.length < length:
-            sleep(1)
-        self.camera.get_background()
-        self.camera.background_flag = True
+        """
+        """
+        self.camera.get_image_background()
 
 
     def plot_image(self):
@@ -481,17 +475,17 @@ class GuiBackend():
         from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg
         from scipy import stats
         from numpy import nonzero, zeros,nan, ones, argwhere, mean, nanmean
+        from lcp_video.analysis import mono12p_to_image
 
-        fig = Figure(figsize=(15,15),dpi=80)#figsize=(7,5))
+
+        fig = Figure(figsize=(15,15))#figsize=(7,5),dpi=80)
         grid = plt.GridSpec(3, 3, hspace=0.025, wspace=0.025)
         t1 = time()
 
         if self.camera is not None:
-            if self.camera.background_flag:
-                print('background corrected')
-                image = self.get_image()-self.camera.background
-            else:
-                image = self.get_image()
+            print('background corrected')
+            img = mono12p_to_image(self.get_image()[:self.camera.img_len], camera.height, camera.width)
+            image = img-self.camera.image_median
         else:
             image = self.get_image()
         roi_row_s = self.roi_row_s
@@ -575,7 +569,7 @@ if __name__ == "__main__":
     from numpy import zeros, right_shift, array
     import PySpin
     from PySpin import System
-    from lcp_video.flir_camera.flir_camera_DL_old import FlirCamera
+    from lcp_video.flir_camera.flir_camera_DL import FlirCamera, read_config_file
 
     from tempfile import gettempdir
     logging.basicConfig(filename=gettempdir()+'/flir_single_camera_gui.log',
@@ -584,23 +578,35 @@ if __name__ == "__main__":
     from numpy import loadtxt
     feducials = loadtxt('feducials.dat', delimiter = ',')
 
-    if len(sys.argv) >0:
-        if sys.argv[1] == 'outside':
-            sn = '20130136'
-        elif sys.argv[1] == 'dm4':
-            sn = '19490369'
-        elif sys.argv[1] == 'dm16':
-            sn = '18159488'
-        elif sys.argv[1] == 'dm34':
-            sn = '18159480'
+    system = PySpin.System.GetInstance()
+    cam = FlirCamera('test',system)
+    cam.get_all_cameras()
+
+    if len(sys.argv)>1:
+        config, flag = read_config_file(sys.argv[1])
+        if flag:
+
+            camera = FlirCamera(config['name'], system)
+            camera.pixel_format = config['pixel_format']
+
+            camera.ROI_width = int(config['ROI_width'])
+            camera.ROI_height = int(config['ROI_height'])
+            camera.ROI_offset_x = int(config['ROI_offset_x'])
+            camera.ROI_offset_y = int(config['ROI_offset_y'])
+            nice = int(config['nice'])
+            camera.nice = nice
+            info(f'setting up nice {nice}')
+            if nice != 0:
+                os.nice(nice)
+            sn = str(config['serial_number'])
+            camera.init(serial_number = sn)
+            camera.start_thread()
+
+            camera.set_exposure_time(config['exposure_time'])
+        else:
+            info('configuration file cannot be found')
 #dm 4 (telecentric), 16 (8-mm wide angle), and 34 (12-mm wide angle)
 
-    system = System.GetInstance()
-
-    camera = FlirCamera(name = sys.argv[1], system = system)
-    camera.init(serial_number = sn, settings = 1)
-
-    from numpy import loadtxt
 
     app = wx.App(False)
     frame = GUI()
