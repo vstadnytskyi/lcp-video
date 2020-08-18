@@ -894,7 +894,7 @@ def read_config_file(filename):
         config = {}
     return config, flag
 
-if __name__ is '__main__':
+if __name__ == '__main__':
     from tempfile import gettempdir
     import logging
     if len(sys.argv)>1:

@@ -37,5 +37,5 @@ class LivePlot():
     def stop(self):
         self.running = False
 
-if __name__ is '__main__':
+if __name__ == '__main__':
     from lcp_video.flir_camera_DL import FlirCamera

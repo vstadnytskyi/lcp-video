@@ -93,7 +93,7 @@ def bin_array(num, m):
     """Convert a positive integer num into an m-bit bit vector"""
     return array(list(binary_repr(num).zfill(m))).astype(uint8)
 
-if __name__ is '__main__':
+if __name__ == '__main__':
     from lcp_video.flir_camera.flir_camera_DL import FlirCamera
 
     system = System.GetInstance()

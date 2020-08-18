@@ -687,7 +687,7 @@ def get_gain_mean_std(camera):
         lst.append(lll)
     return array(lst)
 
-if __name__ is '__main__':
+if __name__ == '__main__':
     from PySpin import System
     system = System.GetInstance()
     camera = FlirCamera('test',system)

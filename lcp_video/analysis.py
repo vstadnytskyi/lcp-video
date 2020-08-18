@@ -1028,43 +1028,25 @@ def get_mono12p_conversion_mask_8bit(length):
     bt = tile(b0,(int((length/(1))),1)).astype('uint8')
     return bt
 
-def mono12packed_to_image(rawdata, height, width, mask= None, mask8= None):
+def mono12packed_to_image(rawdata, height, width):
     """
-    converts FLIR raw data format Mono12Packed to an image with specified size.
+    converts FLIR raw data format Mono12packed to an image with specified size.
 
-    Note: tested only for Mono12Packed data format
-    """
-    from numpy import vstack, tile, hstack, arange,reshape
-    if mask8 is not None:
-        data_Nx8 = ((rawdata.reshape((-1,1)) & (mask8)) != 0)
-    else:
-        data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
-    data_N8x1 = data_Nx8.flatten()
-    data_Mx12 = data_N8x1.reshape((int(rawdata.shape[0]/1.5),12))
-    data = (data_Mx12*mask).sum(axis=1)
-    return data.reshape((height,width)).astype('int16')
-
-def mono12p_to_image_old(rawdata, height, width, mask = None, mask8= None):
-    """
-    converts FLIR raw data format Mono12p to an image with specified size.
-
-    Note: tested only for Mono12p data format
+    Note: tested only for Mono12packed data format
     """
     from numpy import vstack, tile, hstack, arange,reshape
-    from numpy import packbits,reshape, int16
-    if mask8 is not None:
-        data_Nx8 = ((rawdata.reshape((-1,1)) & (mask8)) != 0)
-    else:
-        data_Nx8 = ((rawdata.reshape((-1,1)) & (2**arange(8))) != 0)
-    data_N8x1 = data_Nx8.flatten()
-    data_Mx12 = data_N8x1.reshape((int(rawdata.shape[-1]*length/1.5),12))
-    if mask is not None:
-        data = (data_Mx12 * mask).T.sum(axis=0)
-    else:
-        data = (data_Mx12 * (2**arange(12))).sum(axis=1)
-    return data.reshape((length,height,width)).astype('int16')
+    from numpy import right_shift,bitwise_and,empty
 
-def mono12p_to_image(rawdata, height, width, mask = None, mask8= None):
+    arr = rawdata.reshape(-1,3)
+    byte_even = arr[:,0]+256*(bitwise_and(arr[:,1],15))
+    byte_odd = right_shift(arr[:,1],4) + right_shift(256*arr[:,2],4)
+    img = empty(height*width,dtype='int16')
+    img[0::2] = byte_even
+    img[1::2] = byte_odd
+    return img
+
+
+def mono12p_to_image(rawdata, height, width):
     """
     converts FLIR raw data format Mono12p to an image with specified size.
 

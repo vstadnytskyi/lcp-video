@@ -250,7 +250,7 @@ def save_buffer(root, comments):
     camera_dm4.record_once(600)
     print('done saving to a drive')
 
-if __name__ is '__main__':
+if __name__ == '__main__':
     print('Starting 3 Cameras Code')
     from lcp_video.flir_camera.flir_camera_DL import FlirCamera
 
