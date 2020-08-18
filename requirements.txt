@@ -6,3 +6,4 @@ opencv-python  #video file handling library
 scikit-image
 matplotlib
 librosa #audio file handling library
+ubcs_auxiliary
