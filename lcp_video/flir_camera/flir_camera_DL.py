@@ -23,7 +23,7 @@ class FlirCamera():
 
         #Recording
         self.recording_filename = f'camera_{name}.hdf5'
-        self.recording_root = '/mnt/data/'
+        self.recording_root = '/Users/femtoland/camera_data/'
         self.recording_N = 1
         self.recording = False
         self.recording_pointer = 0
@@ -33,8 +33,14 @@ class FlirCamera():
         self.write_to_hdf5_benchmark = []
 
 
-
         self.threads = {}
+
+        #configuration Parameters
+        self.nice = 0
+        self.reverseX = 0
+        self.reverseY = 0
+        self.rotate = 0
+        self.trigger = 'Software'
 
 
     def init(self, serial_number, settings = 1):
@@ -45,6 +51,12 @@ class FlirCamera():
         from circular_buffer_numpy.queue import Queue
 
         self.cam = self.find_camera(serial_number = serial_number)
+
+        try:
+            self.cam.BeginAcquisition()
+            print ("Acquisition Started")
+        except PySpin.SpinnakerException as ex:
+            info("Acquisition was already started")
         try:
             self.cam.EndAcquisition()
             print ("Acquisition ended")
@@ -159,9 +171,9 @@ class FlirCamera():
     def configure_transport(self):
         cam = self.cam
         # Configure Transport Layer Properties
-        cam.TLStream.StreamBufferHandlingMode.SetValue(PySpin.StreamBufferHandlingMode_OldestFirst )
+        cam.TLStream.StreamBufferHandlingMode.SetValue(PySpin.StreamBufferHandlingMode_OldestFirst)
         cam.TLStream.StreamBufferCountMode.SetValue(PySpin.StreamBufferCountMode_Manual )
-        cam.TLStream.StreamBufferCountManual.SetValue(10)
+        cam.TLStream.StreamBufferCountManual.SetValue(20)
         info(f"Buffer Handling Mode: {cam.TLStream.StreamBufferHandlingMode.GetCurrentEntry().GetSymbolic()}")
         info( f"Buffer Count Mode: {cam.TLStream.StreamBufferCountMode.GetCurrentEntry().GetSymbolic()}")
         info(f"Buffer Count: {cam.TLStream.StreamBufferCountManual.GetValue()}")
@@ -184,6 +196,7 @@ class FlirCamera():
             sn = cam.TLDevice.DeviceSerialNumber.GetValue()
             info(f'sn = {sn}')
             if serial_number == sn:
+                self.serial_number = sn
                 break
         cam_list.Clear()
         return cam
@@ -252,6 +265,20 @@ class FlirCamera():
 
         info(f'starting acquiring background image file')
 
+    def get_image_background_old(self,N=0):
+        """
+        function that acquires N images and calculates M1, M2 and threshold images.
+        """
+        from numpy import mean, var, copy, zeros,std, sqrt
+        if N == 0:
+            N = camera.queue.length
+        raw  = copy(self.queue.peek_last_N(N))
+        img = zeros((N,self.height,self.width))
+        for i in range(N):
+            img[i] = self.convert_raw_to_image(raw[i])
+        self.image_mean = mean(img, axis = 0)
+        self.image_std = sqrt(var(img, axis = 0) + 0.5)
+
     def get_image(self):
         from lcp_video.analysis import mono12p_to_image
         self.last_raw_image *= 0
@@ -260,7 +287,9 @@ class FlirCamera():
             timestamp = image_result.GetTimeStamp()
             frameid = image_result.GetFrameID()
             if (self.last_frameID != -1) and ((frameid-self.last_frameID) != 1):
-                self.num_of_missed_frames += frameid-self.last_frameID
+                missed = frameid-self.last_frameID
+                self.num_of_missed_frames += missed
+                info(f'missed {missed} frames. {self.queue.global_rear}. Current frame ID {frameid}, last frame ID {self.last_frameID} ')
             self.last_frameID = frameid
             # Getting the image data as a numpy array
             image_res = image_result.GetData()
@@ -571,6 +600,18 @@ class FlirCamera():
         import PySpin
 
         "Two different pixel formats: PixelFormat_Mono12p and PixelFormat_Mono12Packed"
+
+        if self.reverseX == 1:
+            print('reversing X axis')
+            self.cam.ReverseX.SetValue(True,True)
+        else:
+            self.cam.ReverseX.SetValue(False,True)
+        if self.reverseY == 1:
+            print('reversing Y axis')
+            self.cam.ReverseY.SetValue(True,True)
+        else:
+            self.cam.ReverseY.SetValue(False,True)
+
         info(f'setting pixel format {self.pixel_format}')
         if self.pixel_format=='mono12p' or self.pixel_format=='mono12p_16':
             try:
@@ -659,17 +700,30 @@ class FlirCamera():
                 info('setting frame rate enable to False')
                 self.cam.AcquisitionFrameRateEnable.SetValue(False)
 
-                info('setting TriggerSource Line0')
-                self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Line0)
-                info('setting TriggerMode On')
-                self.cam.TriggerMode.SetIntValue(PySpin.TriggerMode_On)
+                if self.trigger == 'Line0':
+                    info('setting TriggerSource Line0')
+                    self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Line0)
+                    info('setting TriggerMode On')
+                    self.cam.TriggerMode.SetIntValue(PySpin.TriggerMode_On)
+                    info('setting TriggerSelector FrameStart')
+                    self.cam.TriggerSelector.SetValue(PySpin.TriggerSelector_FrameStart)
+                    info('setting TriggerActivation RisingEdge')
+                    self.cam.TriggerActivation.SetValue(PySpin.TriggerActivation_RisingEdge)
+                    info('setting TriggerOverlap ReadOnly ')
+                    self.cam.TriggerOverlap.SetValue(PySpin.TriggerOverlap_ReadOut)
+                elif self.trigger == "Software":
+                    info('setting TriggerSource Software')
+                    self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Software)
+                    info('setting TriggerMode On')
+                    self.cam.TriggerMode.SetIntValue(PySpin.TriggerMode_Off)
+                else:
+                    info('setting TriggerSource Software')
+                    self.cam.TriggerSource.SetValue(PySpin.TriggerSource_Software)
+                    info('setting TriggerMode On')
+                    self.cam.TriggerMode.SetIntValue(PySpin.TriggerMode_Off)
 
-                info('setting TriggerSelector FrameStart')
-                self.cam.TriggerSelector.SetValue(PySpin.TriggerSelector_FrameStart)
-                info('setting TriggerActivation RisingEdge')
-                self.cam.TriggerActivation.SetValue(PySpin.TriggerActivation_RisingEdge)
-                info('setting TriggerOverlap ReadOnly ')
-                self.cam.TriggerOverlap.SetValue(PySpin.TriggerOverlap_ReadOut)
+
+
 
 
             elif settings ==2:
@@ -894,7 +948,7 @@ def read_config_file(filename):
         config = {}
     return config, flag
 
-if __name__ == '__main__':
+if __name__ is '__main__':
     from tempfile import gettempdir
     import logging
     if len(sys.argv)>1:
@@ -938,6 +992,12 @@ if __name__ == '__main__':
             camera.ROI_height = int(config['ROI_height'])
             camera.ROI_offset_x = int(config['ROI_offset_x'])
             camera.ROI_offset_y = int(config['ROI_offset_y'])
+
+            camera.reverseX = int(config['ROI_offset_y'])
+            camera.reverseY = int(config['ROI_offset_y'])
+            camera.rotate = int(config['rotate'])
+            camera.trigger = config['trigger']
+
             nice = int(config['nice'])
             camera.nice = nice
             info(f'setting up nice {nice}')
