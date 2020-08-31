@@ -23,7 +23,7 @@ class FlirCamera():
 
         #Recording
         self.recording_filename = f'camera_{name}.hdf5'
-        self.recording_root = '/Users/femtoland/camera_data/'
+        self.recording_root = '/mnt/data/'
         self.recording_N = 1
         self.recording = False
         self.recording_pointer = 0
