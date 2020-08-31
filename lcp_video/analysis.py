@@ -85,12 +85,15 @@ def get_binary_moments(mask):
 
     return result
 
+from numpy import array,zeros
+import numba
+@numba.jit(nopython=True, parallel=True)
 def grow_mask(mask,count=1):
     """Expands area where pixels have value=1 by 'count' pixels in each
     direction, including along the diagonal. If count is 1 or omitted a single
     pixel grows to nine pixels.
     """
-    from numpy import array,zeros
+
 
     if count < 1: return mask
     if count > 1: mask = grow_mask(mask,count-1)
@@ -1046,7 +1049,7 @@ def mono12packed_to_image(rawdata, height, width):
     return img
 
 
-def mono12p_to_image(rawdata, height, width):
+def mono12p_to_image(rawdata, height, width, img = None):
     """
     converts FLIR raw data format Mono12p to an image with specified size.
 
@@ -1054,11 +1057,30 @@ def mono12p_to_image(rawdata, height, width):
     """
     from numpy import vstack, tile, hstack, arange,reshape
     from numpy import right_shift,bitwise_and,empty
-
+    if img is None:
+        img = empty(height*width,dtype='int16')
     arr = rawdata.reshape(-1,3)
     byte_even = arr[:,0]+256*(bitwise_and(arr[:,1],15))
     byte_odd = right_shift(arr[:,1],4) + right_shift(256*arr[:,2],4)
-    img = empty(height*width,dtype='int16')
+
+    img[0::2] = byte_even
+    img[1::2] = byte_odd
+    return img
+
+
+import numba
+from numpy import vstack, tile, hstack, arange,reshape
+from numpy import right_shift,bitwise_and,empty,zeros
+@numba.jit(nopython=True, parallel=True)
+def mono12p_to_image_numba(rawdata, height, width, img = None):
+    """
+    converts FLIR raw data format Mono12p to an image with specified size.
+
+    Note: tested only for Mono12p data format
+    """
+    arr = rawdata.reshape(-1,3)
+    byte_even = arr[:,0]+256*(bitwise_and(arr[:,1],15))
+    byte_odd = right_shift(arr[:,1],4) + right_shift(256*arr[:,2],4)
     img[0::2] = byte_even
     img[1::2] = byte_odd
     return img

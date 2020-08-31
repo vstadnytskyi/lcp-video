@@ -1,7 +1,3 @@
-#data sensitive files
-*.conf
-git_ignore/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -12,9 +8,8 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-
-env/
 PySpin/
+env/
 build/
 develop-eggs/
 dist/
