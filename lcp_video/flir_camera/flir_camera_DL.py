@@ -32,7 +32,6 @@ class FlirCamera():
 
         self.write_to_hdf5_benchmark = []
 
-
         self.threads = {}
 
         #configuration Parameters
