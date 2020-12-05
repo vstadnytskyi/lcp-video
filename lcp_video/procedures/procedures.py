@@ -1113,6 +1113,6 @@ def inspect_stats_file(filename):
         chunk_ref = f['chunk'][(0)]
         peak_ref = f['peak'][()]
 
-plt.figure()
-plt.plot(rfn0[peak],counts[peak],'.', color = 'r')
-plt.plot(rfn0_ref[peak_ref],counts_ref[peak_ref],'.', color = 'b')
+    plt.figure()
+    plt.plot(rfn0[peak],counts[peak],'.', color = 'r')
+    plt.plot(rfn0_ref[peak_ref],counts_ref[peak_ref],'.', color = 'b')

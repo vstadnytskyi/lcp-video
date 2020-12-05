@@ -1,6 +1,16 @@
 ﻿"""
 Numerical Analysis and Data Handling library
+
 """
+def _get_modification_time():
+    """
+    returns current library/file modification time.
+
+    This is very handy to identify when was the last time the file was modified. It serves as time based version equivalent.
+    """
+    from os.path import getmtime
+    from time import ctime
+    return ctime(getmtime(__file__))
 
 # Images Analysis Section
 def get_moments(image):
@@ -84,10 +94,65 @@ def get_binary_moments(mask):
     result['lambdam'] = lambdam
 
     return result
+def get_moments_simple(image, mask):
+    """
+    returns moments calculate from a binary mask provided. Uses cv2 (opencv-python) library.
 
-from numpy import array,zeros
-import numba
-@numba.jit(nopython=True, parallel=True)
+    returns a dictionary of moments:
+    'm00', 'm10', 'm01', 'm20', 'm11', 'm02', 'm30', 'm21', 'm12', 'm03', 'mu20', 'mu11', 'mu02', 'mu30', 'mu21', 'mu12', 'mu03
+    ', 'nu20', 'nu11', 'nu02', 'nu30', 'nu21', 'nu12', 'nu03'
+
+    Parameters
+    ----------
+    data :: (numpy array)
+        data to append
+
+    Returns
+    -------
+    moments :: (dictionary)
+
+    Examples
+    --------
+    >>> moments = get_moments(image = image)
+    """
+    from cv2 import moments
+    from math import sqrt
+    from math import atan as arctan
+    import numpy as np
+    m = moments(image*mask)
+
+    m['mu00'] = m['m00']
+    size = image.sum()
+    result = m
+    if size > 1:
+        col_center = m['m10']/m['m00']
+        row_center = m['m01']/m['m00']
+    else:
+        idx = np.where(image == 1)
+        row_center = idx[0][0]
+        col_center = idx[1][0]
+
+    mu_p_20 = m['mu20']/m['m00']
+    mu_p_02 = m['mu02']/m['m00']
+    mu_p_11 = m['mu11']/m['m00']
+    if mu_p_20-mu_p_02 != 0:
+        theta = 0.5*arctan((2*mu_p_11)/(mu_p_20-mu_p_02))
+    else:
+        theta = 0
+
+    lambdap = 0.5*((mu_p_20+mu_p_02)+sqrt(4*mu_p_11**2 + (mu_p_20-mu_p_02)**2))
+    lambdam = 0.5*((mu_p_20+mu_p_02)-sqrt(4*mu_p_11**2 + (mu_p_20-mu_p_02)**2))
+
+    result['col_center'] = col_center
+    result['row_center'] = row_center
+    result['size'] = mask.sum()
+
+    result['theta'] = theta
+    result['lambdap'] = lambdap
+    result['lambdam'] = lambdam
+
+    return result
+
 def grow_mask(mask,count=1):
     """Expands area where pixels have value=1 by 'count' pixels in each
     direction, including along the diagonal. If count is 1 or omitted a single
@@ -1151,33 +1216,6 @@ def generate_table_from_emask(emask, f_num):
             table['size'][spot] = size
     return table
 
-def images_hits_reconstruct(roi_name,frame=-1):
-    """Reconstructs images and hits from roi and hits_coord. If frame = -1,
-    returns 3D versions; if a non-negative integer returns image and hits for a
-    single frame specified by 'frame'."""
-    from numpy import zeros
-    from time import time
-    import h5py
-    t0 = time()
-    f = h5py.File(roi_name,'r')
-    shape = f['shape']
-    mask = f['mask']
-    hits_coord = f['hits_coord']
-    roi = f['roi']
-    hits = zeros(shape,bool)
-    hits[tuple(hits_coord)] = True
-    if frame == -1:
-        images = zeros(shape,dtype='int16')
-        images[:,mask] = roi
-        images = images.reshape(shape)
-    else:
-        hits = hits[frame]
-        shape = f['mask'].shape
-        images = zeros(shape,dtype='int16')
-        images[mask] = roi[frame]
-    print('time to reconstruct images,hits [s]: {:0.3f}'.format(time()-t0))
-    return images,hits
-
 def maxima_from_image(image, hits, stats, offset = None, footprint = 3):
     """
     finds maxima in the image.
@@ -1227,15 +1265,9 @@ def distance_matrix(row,col):
     col_m = ((col_i-col_j)**2)
     matrix = sqrt(row_m + col_m)
     del col_m, row_m, row_i, row_j,col_i, col_j
-    # matrix = zeros((length,length), dtype = 'uint16')+65535
-    # for i in range(length):
-    #     for j in range(length):
-    #         r = (rows[i] - rows[j])*10
-    #         c = (cols[i] - cols[j])*10
-    #         matrix[i,j] = int((r**2 + c**2)**0.5)
     return matrix
 
-def nearest_neibhour(row,col,rfn,N, frame, return_zero = False):
+def nearest_neibhour(row,col,rfn,N, return_zero = False):
     """
     input parameters
     rows
@@ -1246,7 +1278,6 @@ def nearest_neibhour(row,col,rfn,N, frame, return_zero = False):
     """
     from numpy import zeros, nan, nanmin, amin, ones, sqrt, where, argsort
     from lcp_video.analysis import distance_matrix
-    idx = (rfn == frame)
     matrix = distance_matrix(row*10,col*10)
     matrix_argsort = argsort(matrix,axis=0)
     #matrix_sort = np.sort(matrix,axis=1)

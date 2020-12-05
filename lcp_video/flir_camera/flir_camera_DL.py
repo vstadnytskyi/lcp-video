@@ -23,7 +23,7 @@ class FlirCamera():
 
         #Recording
         self.recording_filename = f'camera_{name}.hdf5'
-        self.recording_root = '/mnt/data/'
+        self.recording_root = '/mnt/ramdisk/'
         self.recording_N = 1
         self.recording = False
         self.recording_pointer = 0
@@ -41,6 +41,8 @@ class FlirCamera():
         self.rotate = 0
         self.trigger = 'Software'
 
+        self.calc_on_the_fly = False
+
 
     def init(self, serial_number, settings = 1):
         from numpy import zeros, nan, ones
@@ -51,16 +53,17 @@ class FlirCamera():
 
         self.cam = self.find_camera(serial_number = serial_number)
 
-        try:
-            self.cam.BeginAcquisition()
-            print ("Acquisition Started")
-        except PySpin.SpinnakerException as ex:
-            info("Acquisition was already started")
-        try:
-            self.cam.EndAcquisition()
-            print ("Acquisition ended")
-        except PySpin.SpinnakerException as ex:
-            info("Acquisition was already ended")
+        for i in range(2):
+            try:
+                self.cam.BeginAcquisition()
+                info ("Acquisition Started")
+            except PySpin.SpinnakerException as ex:
+                info("Acquisition was already started")
+            try:
+                self.cam.EndAcquisition()
+                info ("Acquisition ended")
+            except PySpin.SpinnakerException as ex:
+                info("Acquisition was already ended")
 
         self.nodes = self.get_nodes()
 
@@ -91,6 +94,9 @@ class FlirCamera():
             self.img_len = int(self.height*self.width)
             self.images_dtype = 'int16'
         self.queue = Queue((self.queue_length,self.img_len+self.header_length), dtype = self.images_dtype)
+
+        self.queue_frameID = Queue((self.queue_length,2), dtype = 'float64')
+
         self.last_raw_image = zeros((self.img_len+self.header_length,), dtype = self.images_dtype)
 
         from circular_buffer_numpy.circular_buffer import CircularBuffer
@@ -139,6 +145,48 @@ class FlirCamera():
 
         self.last_frameID = -1
         self.num_of_missed_frames = 0
+
+    def read_current_setting(self):
+        """
+        """
+        string = ''
+        exposure_time = camera.cam.ExposureTime.GetValue()
+        print(f'exposure time, us = {round(exposure_time,0)}')
+
+        # Timed TriggerWidth
+        exposure_mode = self.cam.ExposureMode.GetCurrentEntry().GetSymbolic()
+        print(f'exposure mode = {exposure_mode}')
+
+        resulting_frame_rate = camera.cam.AcquisitionResultingFrameRate.GetValue()
+
+        trigger_source = camera.cam.TriggerSource.GetCurrentEntry().GetSymbolic()
+
+        print(f'trigger selector = {trigger_source}')
+
+        trigger_selector = camera.cam.TriggerSelector.GetCurrentEntry().GetSymbolic()
+        print(f'trigger selector = {trigger_selector}')
+
+        trigger_activation = camera.cam.TriggerActivation.GetCurrentEntry().GetSymbolic()
+
+        print(f'trigger activation = {trigger_activation}')
+
+        acquisition_frame_rate_enable = camera.cam.AcquisitionFrameRateEnable.GetValue()
+        print(f'acquisition frame rate enable = {acquisition_frame_rate_enable}')
+
+        acquisition_frame_rate = camera.cam.AcquisitionFrameRate.GetValue()
+        print(f'acquisition frame rate = {acquisition_frame_rate}')
+
+        x_offset = self.cam.OffsetX.GetValue()
+        y_offset = self.cam.OffsetY.GetValue()
+        print(f'Offset (x,y) = ({x_offset},{y_offset})')
+
+        width = self.cam.Width.GetValue()
+        height = self.cam.Height.GetValue()
+        print(f'frame (width,height) = ({width},{height})')
+
+
+        pixel_format  = self.cam.PixelFormat.GetCurrentEntry().GetSymbolic()
+        print(f'pixel format = {pixel_format}')
 
 
 
@@ -285,6 +333,7 @@ class FlirCamera():
             image_result = self.cam.GetNextImage()
             timestamp = image_result.GetTimeStamp()
             frameid = image_result.GetFrameID()
+            info(f'get : {timestamp},    {frameid}')
             if (self.last_frameID != -1) and ((frameid-self.last_frameID) != 1):
                 missed = frameid-self.last_frameID
                 self.num_of_missed_frames += missed
@@ -327,12 +376,12 @@ class FlirCamera():
 
     def run_once(self):
         from time import time
-        from numpy import zeros
+        from numpy import zeros,array
         from lcp_video.analysis import mono12p_to_image
         if self.acquiring:
             raw = self.get_image().reshape(1,self.img_len+4096)
             self.queue.enqueue(raw)
-            if not self.recording:
+            if not self.recording and self.calc_on_the_fly:
                 self.last_reshaped_image = mono12p_to_image(raw[0,:self.img_len],self.height,self.width).reshape((self.height,self.width))
                 hits = ((self.last_reshaped_image>(self.image_threshold+self.image_median))*~self.mask).sum()
                 arr = zeros((1,2))
@@ -392,20 +441,44 @@ class FlirCamera():
         pass
 
     def get_black_level(self):
-        self.cam.BlackLevelSelector.SetValue(0)
-        all = self.cam.BlackLevel.GetValue()*4095/100
-        self.cam.BlackLevelSelector.SetValue(1)
-        analog = self.cam.BlackLevel.GetValue()*4095/100
-        self.cam.BlackLevelSelector.SetValue(2)
-        digital = self.cam.BlackLevel.GetValue()*4095/100
-        self.cam.BlackLevelSelector.SetValue(0)
+        import traceback
+        from numpy import nan
+        all = nan
+        analog = nan
+        digital = nan
+
+        try:
+            self.cam.BlackLevelSelector.SetValue(0)
+        except:
+            error(f'The self.cam.BlackLevelSelector.SetValue(0) failed {traceback.format_exc()}')
+        try:
+            all = self.cam.BlackLevel.GetValue()*4095/100
+        except:
+            error(f'self.cam.BlackLevel.GetValue()*4095/100 failed {traceback.format_exc()}')
+        try:
+            self.cam.BlackLevelSelector.SetValue(1)
+            analog = self.cam.BlackLevel.GetValue()*4095/100
+        except:
+            error(f'sself.cam.BlackLevelSelector.SetValue(1); analog = self.cam.BlackLevel.GetValue()*4095/100 failed {traceback.format_exc()}')
+        try:
+            self.cam.BlackLevelSelector.SetValue(2)
+            digital = self.cam.BlackLevel.GetValue()*4095/100
+        except:
+            error(f'self.cam.BlackLevelSelector.SetValue(2); digital = self.cam.BlackLevel.GetValue()*4095/100 failed {traceback.format_exc()}')
+        try:
+            self.cam.BlackLevelSelector.SetValue(0)
+        except:
+            error(f'self.cam.BlackLevelSelector.SetValue(0) failed {traceback.format_exc()}')
         return {'all':all,'analog':analog,'digital':digital}
 
     def set_black_level(self,value):
         """
         """
-        self.cam.BlackLevelSelector.SetValue(0)
-        self.cam.BlackLevel.SetValue(value*100/4095)
+        try:
+            self.cam.BlackLevelSelector.SetValue(0)
+            self.cam.BlackLevel.SetValue(value*100/4095)
+        except:
+            error(f'self.cam.BlackLevelSelector.SetValue(0); self.cam.BlackLevel.SetValue(value*100/4095) failed {traceback.format_exc()}')
     black_level = property(get_black_level,set_black_level)
 
     def get_temperature(self):
@@ -616,18 +689,18 @@ class FlirCamera():
             try:
                 self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono12p)
             except:
-                info('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono12p)')
+                print('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono12p)')
 
         elif self.pixel_format =='mono12packed':
             try:
                 self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono12Packed)
             except:
-                info('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono12Packed)')
+                print('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono12Packed)')
         elif self.pixel_format =='mono16':
             try:
                 self.cam.PixelFormat.SetValue(PySpin.PixelFormat_Mono16)
             except:
-                info('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono16)')
+                print('cannot set PixelFormat.SetValue(PySpin.PixelFormat_Mono16)')
 
         width_max = self.cam.WidthMax.GetValue()
         height_max = self.cam.HeightMax.GetValue()
@@ -761,14 +834,13 @@ class FlirCamera():
         from numpy import right_shift
 
         rawdata = rawdata[:self.img_len]
+        print(f'rawdata = {rawdata.dtype}')
         if self.pixel_format == 'mono12p':
-            mask = self.conversion_mask
-            mask8 = self.conversion_mask8
-            image = mono12packed_to_image(rawdata=rawdata,height=self.height,width=self.width,mask=mask,mask8=mask8)
+            image = mono12p_to_image(rawdata=rawdata,height=self.height,width=self.width)
         elif self.pixel_format == 'mono12packed':
             mask = self.conversion_mask
             mask8 = self.conversion_mask8
-            image = mono12packed_to_image(rawdata=rawdata,height=self.height,width=self.width,mask=mask,mask8=mask8)
+            image = mono12packe_to_image(rawdata=rawdata,height=self.height,width=self.width,mask=mask,mask8=mask8)
         elif self.pixel_format == 'mono16':
             image = right_shift(rawdata,4).reshape((self.height,self.width))
         elif self.pixel_format == 'mono12p_16':
@@ -828,24 +900,26 @@ class FlirCamera():
 
     def record_once(self,filename,N):
         """
-        records a sequence of N frames.
+        records a sequence of N frames and save them in filename hdf5 file.
         """
         from h5py import File
         from time import time
-        images = self.queue.dequeue(N)
-        if images.shape[0] > 0:
+        N = 1 #temporary work around. extract only 1 frame and save it. Got rid of for loop and now reading -1 index instead of 0.
+        raws = self.queue.dequeue(N)
+
+        if raws.shape[0] > 0:
             with File(filename,'a') as f:
-                for i in range(N):
-                    pointer = self.recording_pointer
-                    image = images[i]
-                    tlab,tcam,frameID = self.extract_timestamp_image(image)
-                    f['images'][pointer] = image[:self.img_len]
-                    f['timestamps_lab'][pointer] = tlab
-                    f['timestamps_camera'][pointer] = tcam
-                    f['frameIDs'][pointer] = frameID
-                    self.recording_pointer += 1
+                #for i in range(N):
+                pointer = self.recording_pointer
+                raw = raws[-1]#raw = raws[i]
+                tlab,tcam,frameID = self.extract_timestamp_image(raw)
+                f['images'][pointer] = raw[:self.img_len]
+                f['timestamps_lab'][pointer] = tlab
+                f['timestamps_camera'][pointer] = tcam
+                f['frameIDs'][pointer] = frameID
+                self.recording_pointer += 1
         else:
-            info(f'{self.name}: got empty array from deque with rear value in the queue of {self.queue.rear}')
+            warn(f'{self.name}: got empty array from deque with rear value in the queue of {self.queue.rear}')
 
     def recording_run(self):
         """
@@ -903,16 +977,18 @@ class FlirCamera():
         self.recording = False
         self.threads['recording'] = None
 
-    def extract_timestamp_image(self,img):
+    def extract_timestamp_image(self,raw):
         """
         Extracts header information from the
+
+        returns timestamp_lab,timestamp_cam,frameid
         """
         pointer = self.img_len
-        header_img = img[pointer:pointer+64]
+        header_img = raw[pointer:pointer+64]
         timestamp_lab =  self.binarr_to_number(header_img)/1000000
-        header_img = img[pointer+64:pointer+128]
+        header_img = raw[pointer+64:pointer+128]
         timestamp_cam =  self.binarr_to_number(header_img)
-        header_img = img[pointer+128:pointer+192]
+        header_img = raw[pointer+128:pointer+192]
         frameid =  self.binarr_to_number(header_img)
         return timestamp_lab,timestamp_cam,frameid
 
@@ -947,11 +1023,12 @@ def read_config_file(filename):
         config = {}
     return config, flag
 
-if __name__ is '__main__':
+if __name__ == '__main__':
     from tempfile import gettempdir
     import logging
     if len(sys.argv)>1:
-        logging.basicConfig(filename=gettempdir()+f"/{sys.argv[1]}_flir_camera_DL.log", level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+        config, flag = read_config_file(sys.argv[1])
+        logging.basicConfig(filename=gettempdir()+f"/{config['name']}_flir_camera_DL.log", level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
     else:
         logging.basicConfig(filename=gettempdir()+f"/unknown_flir_camera_DL.log", level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -959,29 +1036,17 @@ if __name__ is '__main__':
     system = PySpin.System.GetInstance()
     cam = FlirCamera('test',system)
     cam.get_all_cameras()
-    print("a parameter can be passed when flir_camera_DL executed. example: run flir_camera_DL.py 'dmout' will inititalize camera as dmout camera.")
+    print('Example of usage')
 
-    print("camera_dm4 = FlirCamera('dm4', system)")
-    print("camera_dm4.init(serial_number = '19490369')")
-    print('camera_dm4.start_thread()')
-
-    print("camera_dm34 = FlirCamera('dm34',system)")
-    print("camera_dm34.init(serial_number = '18159480')")
-    print('camera_dm34.start_thread()')
-
-    print("camera_dm16 = FlirCamera('dm16',system)")
-    print("camera_dm16.init(serial_number = '18159488')")
-    print('camera_dm16.start_thread()')
-
-    print("camera_out = FlirCamera('dmout',system)")
-    print("camera_out.init(serial_number = '20130136')")
-    print('camera_out.start_thread()')
-
+    print('An e')
     print("camera.recording_init(N_frames = 600, name = 'dataset-name', overwrite = False)")
+    print('To read current settings on the camera')
+    print("camera.read_current_setting()")
+
 
 
     if len(sys.argv)>1:
-        config, flag = read_config_file(sys.argv[1])
+
         if flag:
 
             camera = FlirCamera(config['name'], system)

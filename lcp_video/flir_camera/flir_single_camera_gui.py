@@ -1,7 +1,7 @@
 #!/bin/env python
 """
 """
-from time import time, sleep, clock
+from time import time, sleep
 import sys
 import os.path
 import struct
@@ -397,6 +397,9 @@ class GuiBackend():
         self.filename_prefix = 'no assigned'
         self.feducials = feducials
         self.gamma = camera.gamma
+        self.time_series = []
+        self.time_series_max = 0
+        self.time_series_min = 10**20
 
     def run(self):
         from time import sleep
@@ -419,11 +422,11 @@ class GuiBackend():
         from numpy import random, mean
         cam = self.camera
         if cam is None:
-            w = 4096
-            h = 3000
+            w = cam.width
+            h = cam.height
             image = random.randint(2**7, size=(int(w*h*1.5),), dtype = 'int16')
         else:
-            image = mean(cam.queue.peek_last_N(15)[:self.camera.img_len], axis = 0)
+            image = cam.queue.peek_last_N(1)[0,:self.camera.img_len]
         return image
 
     def update_moments(self, m = None):
@@ -478,13 +481,17 @@ class GuiBackend():
         from lcp_video.analysis import mono12p_to_image
 
 
-        fig = Figure(figsize=(15,15))#figsize=(7,5),dpi=80)
+        fig = Figure(figsize=(6,6))
         grid = plt.GridSpec(3, 3, hspace=0.025, wspace=0.025)
         t1 = time()
 
         if self.camera is not None:
             print('background corrected')
-            img = mono12p_to_image(self.get_image()[:self.camera.img_len], camera.height, camera.width)
+            if self.camera.pixel_format == 'mono16':
+                img = self.camera.convert_raw_to_image(self.get_image())
+            elif self.camera.pixel_format == 'mono12':
+                img = mono12p_to_image(self.get_image()[:self.camera.img_len], camera.height, camera.width)
+            img = img.astype('float64')
             image = img-self.camera.image_median
         else:
             image = self.get_image()
@@ -495,7 +502,7 @@ class GuiBackend():
         img = image[roi_row_s:roi_row_e,roi_col_s:roi_col_e]
         bckg = (img[:,0:5].mean() + img[:,-5:-1].mean() + img[0:5,:].mean() +  img[-5:-1,:].mean())/4
         ax1 = fig.add_subplot(grid[0:2,0:2])
-        ax1.imshow(img)
+        ax1.imshow(img.astype('int16'))
         vrow = img.sum(axis = 1)
 
         y = arange(0,vrow.shape[0])
@@ -506,6 +513,25 @@ class GuiBackend():
         vcol = img.sum(axis = 0)
         x = arange(0,vcol.shape[0])
         axh.plot(x,vcol)
+
+        if (img > 4050).any():
+            satur_flag = True
+        else:
+            satur_flag = False
+        s2 = (img*img).sum()
+
+
+        import numpy as np
+        self.time_series.append(s2)
+        if len(self.time_series) > 100:
+            self.time_series.pop(0)
+        self.time_series_min = np.min(np.array(self.time_series))
+        self.time_series_max = np.max(np.array(self.time_series))
+
+        ax3 = fig.add_subplot(grid[2,2] )
+        ax3.plot(self.time_series)
+        ax3.axhline(self.time_series_max)
+        ax3.axhline(self.time_series_min)
 
         from lcp_video.analysis import get_moments
         img = img.astype('float64')
@@ -593,11 +619,6 @@ if __name__ == "__main__":
             camera.ROI_height = int(config['ROI_height'])
             camera.ROI_offset_x = int(config['ROI_offset_x'])
             camera.ROI_offset_y = int(config['ROI_offset_y'])
-            nice = int(config['nice'])
-            camera.nice = nice
-            info(f'setting up nice {nice}')
-            if nice != 0:
-                os.nice(nice)
             sn = str(config['serial_number'])
             camera.init(serial_number = sn)
             camera.start_thread()
@@ -614,4 +635,4 @@ if __name__ == "__main__":
     gui_backend = GuiBackend(camera)
     gui_backend.start()
 
-    #app.MainLoop()
+    app.MainLoop()
