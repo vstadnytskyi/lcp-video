@@ -60,7 +60,7 @@ class FlirCamera():
             except PySpin.SpinnakerException as ex:
                 info("Acquisition was already started")
             try:
-                self.cam.EndAcquisition()
+                self.cam.AcquisitionStop()
                 info ("Acquisition ended")
             except PySpin.SpinnakerException as ex:
                 info("Acquisition was already ended")
@@ -898,6 +898,15 @@ class FlirCamera():
                 f.create_dataset('frameIDs', (N_frames,) , dtype = 'int64')
         self.recording_filename = filename
 
+    def record_dataset(self, root = '/mnt/data/', name = 'test', N_frames = 256, overwrite = False):
+        self.recording_stop()
+        sleep(1)
+        self.queue.reset();
+        self.recording_root = root
+        self.recording_init(N_frames,name,overwrite)
+        self.recording_start()
+        print(f'avaiting trigger pulses. The name of the first chunk is {camera.recording_filename}')
+
     def record_once(self,filename,N):
         """
         records a sequence of N frames and save them in filename hdf5 file.
@@ -1022,6 +1031,8 @@ def read_config_file(filename):
     else:
         config = {}
     return config, flag
+
+
 
 if __name__ == '__main__':
     from tempfile import gettempdir
