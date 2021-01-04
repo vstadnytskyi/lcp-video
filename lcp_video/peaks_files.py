@@ -146,21 +146,18 @@ def copy(dpeaks, indices, new_filename = None, overwrite = False):
     lst_nonarray =  ['M0', 'M1_mean', 'M1_threshold', 'M2_mean', 'M2_threshold','frameID0', 'shape']
 
     exists = os.path.exists(new_filename)
-
+    dset = []
     for key in list(dpeaks.keys()):
-        print(key)
-        if overwrite:
-            with h5py.File(new_filename,'w') as f:
-                pass
-        else:
-            pass
+
         with h5py.File(new_filename,'a') as f:
+            print(key)
             if key in lst_nonarray:
                 print(1)
-                f.create_dataset(key, data = dpeaks[key])
+                dset.append(f.create_dataset(key, data = dpeaks[key]))
             else:
                 print(0)
-                f.create_dataset(key, data = dpeaks[key][indices])
+                dset.append(f.create_dataset(key, data = dpeaks[key][indices]))
+    return dset
 
 ## IMAGE reconstruction
 
