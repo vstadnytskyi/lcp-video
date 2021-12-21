@@ -26,13 +26,14 @@ def join_raw_filename(root,camera_name,dataset_name,chunk,extension):
 
 def list_dataset(filename):
     """
-    filename is a raw.hdf5 file, any of them. The function returns  all filenames associated with the dataset.
+    filename is a img.hdf5 file, any of them. The function returns  all filenames associated with the dataset.
 
-    the dataset raw.hdf5 file structure is the following:
-    camera-name_dataset-name_chunk-number.raw.hdf5
+    the dataset img.hdf5 file structure is the following:
+    camera-name_dataset-name_chunk-number.img.hdf5
     """
     import os
     import numpy as np
+
 
     root,camera_name,dataset_name,chunk,extension = split_raw_filename(filename)
     lst_dir = os.listdir(root)
@@ -41,7 +42,7 @@ def list_dataset(filename):
     for item in lst_dir:
         if item.find(camera_name+'_'+dataset_name + '_') != -1:
             rt,camera_name,dataset_name,chunk,extension = split_raw_filename(item)
-            if extension == "raw.hdf5":
+            if extension == "img.hdf5":
                 lst_dataset.append(os.path.join(root,item))
                 lst_order.append(int(chunk))
     lst_sorted = np.argsort(np.array(lst_order))
@@ -240,106 +241,81 @@ def get_timestamps_camera(filename):
             arr[index*256:(index+1)*256] = f['timestamps_camera'][()]
     return arr
 
-def convert_raw_to_img(src_filename,dst_filename, verbose = False, numba = False):
-    """
-    converts .raw. data files to .img. data files preserving all original fields. The function will create a new file with the same name but different suffix
-    """
-    if verbose:
-        print(f'source filename: {src_filename}')
-        print(f'destination filename: {dst_filename}')
-    from h5py import File
-    from lcp_video.analysis import mono12p_to_image, mono12p_to_image_numba
-    if numba:
-        mono12p_to_image = mono12p_to_image_numba
-    src = File(src_filename,'r')
-    width =  src['image width'][()]
-    height =  src['image height'][()]
-    length = src['images'].shape[0]
-
-    with File(dst_filename,'w') as dst:
-        for key in src.keys():
-            if "images" not in key :
-                dst.create_dataset(key, data = src[key][()])
-            else:
-                dst.create_dataset('images', (length,height,width), dtype='int16', chunks = (1,height,width))
-        for i in range(length):
-            raw = src['images'][i]
-            dst['images'][i] = mono12p_to_image(raw,height,width).reshape((height,width))
-
-def convert_all_raw_to_img_once(src_root, dst_root = None, retain = True,verbose = False, overwrite = False, numba = False):
-    """
-    looks for .raw. files in a directory and converts them to .img. files.
-
-    Parameters
-    ----------
-    src_root (string)
-    dst_root (string)
-    retain (boolean)
-    verbose (boolean)
-    overwrite (boolean)
-
-    Returns
-    -------
-    """
-    from time import time, sleep
-    import ubcs_auxiliary as ua
-    from lcp_video.raw_files import convert_raw_to_img
-    lstdir = ua.os.listdir(src_root)
-    import os
-
-    lstdir = []
-    for root, dirs, files in os.walk(src_root):
-        for file in files:
-            if file.endswith('.raw.hdf5'):
-                lstdir.append(os.path.join(root, file))
-    for src_filename in lstdir:
-        head,tail = os.path.split(src_filename)
-        timestamp = os.path.getmtime(src_filename)
-        if dst_root is None:
-            dst_root_l = head
-
-        dst_filename = os.path.join(dst_root_l,tail.replace('.raw.hdf5','.img.hdf5'))
-        flag = ua.os.does_filename_have_counterpart(src_filename,dst_root_l,'.img.hdf5')
-        if overwrite:
-            flag = False
-        if not flag:
-            t1 = time()
-            convert_raw_to_img(src_filename,dst_filename.replace('.img.hdf5','.tmpimg.hdf5'), verbose = verbose)
-
-            t2 = time()
-            dt = t2-t1
-            os.rename(dst_filename.replace('.img.hdf5','.tmpimg.hdf5'),dst_filename)
-            os.utime(dst_filename,(timestamp, timestamp))
-            if verbose:
-                print(f'renamed to {dst_filename}')
-            if not retain:
-                os.remove(src_filename)
-                if verbose:
-                    print(f'removed {src_filename}')
-
-            if verbose:
-                print(f'conversion done in {dt} seconds')
-                print(f'-----------------------------')
-        else:
-            pass
-    return None
-
-def convert_all_raw_to_img_always(src_root, dst_root = None, verbose = False, overwrite = False, retain = True):
-    """
-    """
-    from time import time, sleep
-    sleep_time = 60
-    while True:
-        t1 = time()
-        convert_all_raw_to_img_once(src_root, dst_root, verbose = verbose, overwrite = overwrite, retain = retain)
-        t2 = time()
-        dt = t2-t1
-        if dt < sleep_time:
-            if verbose:
-                print('waiting for files ...')
-            sleep(60)
-
-
 
 def create_treshold(filename, chunk):
+    pass
+
+def func(filename):
+     import numpy as np
+     from h5py import File
+     f = File(filename)
+     data = f['images'][()]
+     sorted = np.sort(data, axis = 0)
+     from ubcs_auxiliary import save_load_object
+     from os import path
+     head, tail = path.split(filename)
+     dst_name = tail.split('.')[0]
+     dic = {}
+     dic['imax'] = sorted[254:]
+     dic['mean'] = np.mean(sorted[2:-2],axis =0)
+     dic['std'] = np.std(sorted[2:-2], axis = 0)
+     dic['imin'] = sorted[:2]
+     save_load_object.save_to_file(path.join(head, dst_name + '.dict.npy'),dic)
+     #save_load_object.save_to_file(path.join(head, dst_name + '.data.npy'),data)
+
+class DataSet(object):
+    def __init__(self,pathname):
+        from os import path
+        from lcp_video import img_files
+        head, tail = path.split(pathname)
+        self.root = head
+        dataset_name = tail.split('.')[0]
+        dataset_parts = dataset_name.split('_')
+        name = "_".join(dataset_parts[:-1])
+        self.pathname = pathname
+        self.name = name
+        self.list = img_files.list_dataset(pathname)
+        self.frame_ids = img_files.get_frameids(pathname).astype('int64')
+
+
+    def get_frame_by_id(self, id):
+        """
+        """
+        import numpy as np
+        from h5py import File
+        import os
+        if id <= self.frame_ids[-1]:
+            idx = np.where(self.frame_ids == id)[0][0]
+            chunk = int(idx/256)
+            frame = idx - chunk*256
+            filename = os.path.join(self.root, self.name + f'_{chunk}.img.hdf5')
+            with File(filename,'r') as f:
+                img = f['images'][frame]
+        else:
+            img = None
+        return img
+
+    def get_frameid_by_id(self, id):
+        """
+        """
+        import numpy as np
+        from h5py import File
+        import os
+        if id <= self.frame_ids[-1]:
+            idx = np.where(self.frame_ids == id)[0][0]
+            chunk = int(idx/256)
+            frame = idx - chunk*256
+            filename = os.path.join(self.root, self.name + f'_{chunk}.img.hdf5')
+            with File(filename,'r') as f:
+                frame_id = f['frameIDs'][frame]
+        else:
+            frame_id = None
+        return frame_id
+
+def extract_channel_archiver_data():
+    """
+    extract channel archiver data for given set of PVs. Creates a separate log file with a separate entry for each frameID.
+
+    get the list of all .img. files that conform to the selected
+    """
     pass

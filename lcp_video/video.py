@@ -32,7 +32,7 @@ def get_video_info(filename):
     dic['iso'] = vidcap.get(cv2.CAP_PROP_ISO_SPEED)
     dic['frame_count'] = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
     dic['format'] = vidcap.get(cv2.CAP_PROP_FORMAT)
-    dic['fps'] = round(vidcap.get(cv2.CAP_PROP_FPS),0)
+    dic['fps'] = vidcap.get(cv2.CAP_PROP_FPS)
     return dic
 
 
@@ -129,3 +129,78 @@ def get_cum_frames_index_range(filename, start, end):
             arr[i] = image
         i+=1
     return arr
+
+def parse_video_into_frames(filename):
+    import cv2
+    from os.path import exists,split
+    from os import mkdir
+    import sys
+    root = split(filename)[0]
+    prefix = split(filename)[1].split('.')[0]
+    print('Checking if the file exist ...')
+    print('File does exist:',exists(filename))
+    images_root = root +'/'+prefix+'_images/'
+    if not exists(images_root):
+        mkdir(images_root)
+    vidcap = cv2.VideoCapture(filename)
+    success,image = vidcap.read()
+    count = 0
+    success = True
+    while success:
+      success,image = vidcap.read()
+      if success:
+          print(f'extracting frame # {count} and saving to {images_root}')
+          #cv2.imwrite(images_root+"frame%d.tiff" % count, image)     # save frame as JPEG file
+          from PIL import Image
+          im = Image.fromarray(image)
+          im.save(images_root+f"frame{count}.tiff" , dpi = (300,300))
+          if cv2.waitKey(10) == 27:                     # exit if Escape is hit
+              break
+          count += 1
+      else:
+          count += 1
+          #print('end of file. Nothing to extract')
+    else:
+        print('filename and path is required as input to the script')
+
+def segment_video_into_clips(filename, start, end, label = ''):
+
+    import os
+    import cv2
+    from lcp_video import video
+    root,videoname = os.path.split(filename)
+    source_info = video.get_video_info(root+'/'+videoname)
+    print(source_info)
+    source = cv2.VideoCapture(root+'/'+videoname)
+
+    fourcc = cv2.VideoWriter_fourcc(*'DIVX')
+
+    dest_videoname = root + '/'+videoname.split('.')[0]+'/'+videoname.split('.')[0] + '_'+str(start) + '_' + str(end) + '_' + label + '_' + '.mp4'
+    print(f'destination filename: {dest_videoname}')
+    destination = cv2.VideoWriter(dest_videoname, fourcc, source_info['fps'], (source_info['width'],source_info['height']))
+
+    i = start
+    source.set(cv2.CAP_PROP_POS_FRAMES,i)
+    success,image = source.read()
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    org = (50, 50)
+    fontScale = 1
+    color = (0, 0, 255,0) #CMYK?
+    thickness = 2
+    image = cv2.putText(image,f'{i}', org, font,
+                                fontScale, color, thickness, cv2.LINE_AA)
+    destination.write(image)
+    i+=1
+    while i < end:
+        success,image = source.read()
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        org = (50, 50)
+        fontScale = 1
+        color = (0, 0, 255,0) #CMYK?
+        thickness = 2
+        image = cv2.putText(image,f'{i}', org, font,
+                                    fontScale, color, thickness, cv2.LINE_AA)
+        destination.write(image)
+        i+=1
+    cv2.destroyAllWindows()
+    destination.release()

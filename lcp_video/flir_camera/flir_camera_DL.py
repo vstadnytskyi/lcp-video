@@ -2,7 +2,10 @@
 from time import time, sleep
 from numpy import zeros, right_shift, array, copy
 import PySpin
-from logging import debug, info, warning, error
+from logging import debug, info, warning, error, critical
+import logging
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+
 
 from PySpin import PixelFormat_Mono16,PixelFormat_Mono12Packed
 import sys

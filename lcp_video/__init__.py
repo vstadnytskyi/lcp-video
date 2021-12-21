@@ -10,3 +10,6 @@ from . import plotting
 from . import benchmarks
 from . import peaks_files
 from . import roi_files
+from . import img_files
+from . import raw_files
+from . import hdf5_files

@@ -2,6 +2,11 @@
 Numerical Analysis and Data Handling library
 
 """
+import logging
+from logging import debug, info, warn, error
+import warnings
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+
 def _get_modification_time():
     """
     returns current library/file modification time.
@@ -1114,7 +1119,7 @@ def mono12packed_to_image(rawdata, height, width):
     return img
 
 
-def mono12p_to_image(rawdata, height, width, img = None):
+def mono12p_to_image(rawdata, height, width, img = None, reshape = False):
     """
     converts FLIR raw data format Mono12p to an image with specified size.
 
@@ -1130,6 +1135,8 @@ def mono12p_to_image(rawdata, height, width, img = None):
 
     img[0::2] = byte_even
     img[1::2] = byte_odd
+    if reshape:
+        img = img.reshape((height,width))
     return img
 
 
@@ -1297,3 +1304,32 @@ def nearest_neibhour(row,col,rfn,N, return_zero = False):
             dic[f'col{i}'] = 5000
             dic[f'rfn{i}'] = 0
     return dic
+
+def get_focus_USAF_1951_target(image, r = [0,-1], c=[0,-1], threshold = 100, sigma = 1):
+    """
+    1) take an image
+    2) select region of interest
+    3) subtract 15 (dark)
+    4) calculate Gaussian gradient magnitude
+        scipy.ndimage.gaussian_gradient_magnitude
+    5) sum up all values above a threshold
+    """
+    from scipy.ndimage import gaussian_gradient_magnitude
+    roi = image[r[0]:r[1],c[0]:c[1]].astype('float64')-15.0
+    print(f'{roi.sum()}')
+    grad = gaussian_gradient_magnitude(roi,sigma = sigma)
+    mask = grad > threshold
+    num = grad[mask].sum()
+    sat = roi >= (4093-15.0)
+    if sat.sum()>0:
+        print(f'saturated pixels detected. {sat.sum()}')
+    print(f'{sat.sum()}')
+    return num
+
+
+
+if __name__ == "__main__":
+    from tempfile import gettempdir
+    logging.basicConfig(filename=gettempdir()+'/lcp_video.analysis.log',
+                level=logging.DEBUG,
+                format="%(asctime)-15s|PID:%(process)-6s|%(levelname)-8s|%(name)s| module:%(module)s-%(funcName)s|message:%(message)s")

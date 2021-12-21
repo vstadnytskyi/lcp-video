@@ -146,3 +146,41 @@ def plot_image_and_projection(image, vrow = None, vcol = None):
         vcol = image.sum(axis = 0)
     x = arange(0,vcol.shape[0])
     axh.plot(x,vcol)
+
+
+def plot_time_of_flight(t,hits1, filename, t0 = 60):
+    from matplotlib import pyplot as plt
+    import numpy as np
+    import os
+
+    d = 2*1e6*np.sqrt(0.85*(1e-8)*0.7/((t-t[0])/1e9 - t0))
+
+    fig = plt.figure(figsize=(5,5))
+    grid = plt.GridSpec(2, 1, hspace=0.25, wspace=0.25)
+
+    ax1 = fig.add_subplot(grid[0,0])
+    ax2 = fig.add_subplot(grid[1,0])
+
+    ax1.plot((t-t[0])/1e9 - 60,hits1)
+    ax1.set_xlabel('time, seconds')
+    ax1.set_ylabel('hits1')
+    ax1.set_yscale('log')
+    ax1.set_xscale('log')
+    ax1.set_ylim([0.9,hits1.max()*1.1])
+
+    ax2.plot(d,hits1)
+    ax2.set_xlabel('diameter, microns')
+    ax2.set_ylabel('hits1')
+    ax2.set_yscale('log')
+    ax2.set_xscale('log')
+    ax2.set_xlim([0.01,1000])
+    ax2.set_ylim([0.9,hits1.max()*1.1])
+
+    ax1.set_title(os.path.split(filename)[0]+'\n'+os.path.split(filename)[1])
+
+
+def add_comment(camera, comment):
+    with open(camera.recording_basefilename+'.txt','a') as f:
+        f.write(f'time: {ctime(time())}' + '\n')
+        f.write(f'chunk:  {camera.recording_chunk_pointer}'+ '\n')
+        f.write(f'comment:  {comment}' + '\n')
